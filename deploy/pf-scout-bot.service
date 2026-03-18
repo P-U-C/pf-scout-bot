@@ -1,0 +1,22 @@
+[Unit]
+Description=PF Scout Bot - Post Fiat contributor intelligence bot
+After=network.target pf-scout-api.service
+Wants=pf-scout-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/pf-scout-bot/bot
+EnvironmentFile=/opt/pf-scout-bot/.env
+ExecStart=/usr/bin/node --loader tsx/esm src/index.ts
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pf-scout-bot
+
+# Allow outbound XRPL WebSocket connections
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
