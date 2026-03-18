@@ -13,6 +13,7 @@ export interface ScoutQuery {
   tier?: string;
   limit?: number;
   rubric?: string;
+  params?: Record<string, string>; // extra params passed through to scout-api (e.g. requester_wallet)
 }
 
 export interface ScoutResult {

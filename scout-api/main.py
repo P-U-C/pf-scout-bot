@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import health, search, profile, list_contacts
+from .routes import auth_tier, health, list_contacts, profile, search
 
 app = FastAPI(
     title="pf-scout API",
@@ -18,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth_tier.router, prefix="/auth", tags=["auth"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(profile.router, prefix="/profile", tags=["profile"])
 app.include_router(list_contacts.router, prefix="/list", tags=["list"])

@@ -10,6 +10,7 @@ class SearchRequest(BaseModel):
     rubric: Optional[str] = None
     source: Optional[str] = None
     min_score: Optional[float] = None
+    requester_wallet: Optional[str] = None  # XRPL r-address for visibility filtering
 
 
 class ContactSummary(BaseModel):
