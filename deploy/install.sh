@@ -73,3 +73,10 @@ echo "       systemctl start pf-scout-bot"
 echo "  3. Watch logs:"
 echo "       journalctl -fu pf-scout-api"
 echo "       journalctl -fu pf-scout-bot"
+
+# Enable enrichment timer (Phase 3)
+cp /opt/pf-scout-bot/deploy/pf-scout-enrichment.service /etc/systemd/system/
+cp /opt/pf-scout-bot/deploy/pf-scout-enrichment.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable pf-scout-enrichment.timer
+systemctl start pf-scout-enrichment.timer

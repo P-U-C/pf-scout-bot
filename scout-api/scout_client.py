@@ -71,6 +71,22 @@ def search_contacts(
     return [_to_summary(c) for c in contacts[:limit]]
 
 
+def filter_by_source(contacts: list[dict], source: Optional[str]) -> list[dict]:
+    """Filter contacts by source ecosystem.
+
+    source="external"  → only contacts tagged 'external-prospect'
+    source="internal"  → exclude contacts tagged 'external-prospect'
+    source=None/other  → no filtering
+    """
+    if not source:
+        return contacts
+    if source == "external":
+        return [c for c in contacts if "external-prospect" in (c.get("tags") or [])]
+    if source == "internal":
+        return [c for c in contacts if "external-prospect" not in (c.get("tags") or [])]
+    return contacts
+
+
 def get_profile(identifier: str, rubric: Optional[str] = None) -> Optional[ContactProfile]:
     cmd = ["pf-scout", "show", identifier, "--format", "json"]
     if rubric:

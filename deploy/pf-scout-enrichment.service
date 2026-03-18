@@ -1,0 +1,12 @@
+[Unit]
+Description=PF Scout Enrichment — signal refresh (oneshot)
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/pf-scout-bot
+EnvironmentFile=/opt/pf-scout-bot/.env
+ExecStart=/opt/pf-scout-bot/.venv/bin/python -m enrichment.refresh
+StandardOutput=journal
+StandardError=journal

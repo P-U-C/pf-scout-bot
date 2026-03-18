@@ -23,6 +23,12 @@ class ContactSummary(BaseModel):
     bio: Optional[str] = None
 
 
+class RelatedContact(BaseModel):
+    contact_id: str
+    label: str
+    relationship: str
+
+
 class ContactProfile(BaseModel):
     identifier: str
     display_name: Optional[str] = None
@@ -40,6 +46,7 @@ class ContactProfile(BaseModel):
     postfiat_stats: Optional[dict] = None
     last_updated: Optional[str] = None
     snapshot_history: List[dict] = []
+    related_contacts: List[RelatedContact] = []
 
 
 class SearchResponse(BaseModel):
