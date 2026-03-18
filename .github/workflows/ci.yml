@@ -1,23 +1,76 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
 jobs:
-  lint-api:
+  # ── Python: scout-api + enrichment ────────────────────────────────────────
+  python:
+    name: Python lint + syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+
       - name: Install dependencies
-        run: pip install ruff pydantic pydantic-settings fastapi
-      - name: Lint
+        run: |
+          pip install --quiet ruff
+          pip install --quiet -r scout-api/requirements.txt
+
+      - name: Ruff lint — scout-api
         run: ruff check scout-api/
-      - name: Syntax check
+
+      - name: Ruff lint — enrichment
+        run: ruff check enrichment/
+
+      - name: Syntax check — all Python
         run: |
           python -c "
-          import ast, glob
+          import ast, glob, sys
           files = glob.glob('scout-api/**/*.py', recursive=True)
+          files += glob.glob('enrichment/**/*.py', recursive=True)
+          failed = []
           for f in files:
-              ast.parse(open(f).read())
-              print('OK:', f)
+              try:
+                  ast.parse(open(f).read())
+              except SyntaxError as e:
+                  print(f'SYNTAX ERROR: {f}: {e}')
+                  failed.append(f)
+          if failed:
+              sys.exit(1)
+          print(f'OK: {len(files)} files')
           "
+
+      - name: FastAPI import check
+        run: |
+          cd scout-api
+          pip install --quiet fastapi pydantic-settings uvicorn
+          python -c "from main import app; print('FastAPI app loads OK')"
+
+  # ── TypeScript: bot ────────────────────────────────────────────────────────
+  typescript:
+    name: TypeScript compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: bot
+
+      - name: TypeScript compile check
+        run: npx tsc --noEmit
+        working-directory: bot
