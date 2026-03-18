@@ -1,0 +1,23 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  lint-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install ruff pydantic pydantic-settings fastapi
+      - name: Lint
+        run: ruff check scout-api/
+      - name: Syntax check
+        run: |
+          python -c "
+          import ast, glob
+          files = glob.glob('scout-api/**/*.py', recursive=True)
+          for f in files:
+              ast.parse(open(f).read())
+              print('OK:', f)
+          "
