@@ -126,6 +126,18 @@ Reply with their handle for full profile.
 | List | "Show me the top 5 contributors" | Ranked contributor list by tier |
 | Help | "help" | Usage guide |
 
+## Session Context
+
+The bot maintains per-wallet conversation state (`bot/src/session.ts`) with a 30-minute TTL.
+When a user asks a follow-up like "tell me more about that contributor", the bot resolves
+"that contributor" to the most recent search/profile result for that wallet.
+
+**How it works:**
+1. Each query + result is stored keyed by sender wallet address
+2. Follow-up detection checks for phrases like "tell me more", "that one", "expand"
+3. If a follow-up is detected and a session exists, the bot auto-resolves to a profile query
+4. Sessions expire after 30 minutes of inactivity
+
 ---
 
 ## Example Interactions
@@ -196,87 +208,9 @@ Reply with their handle for full profile.
 
 ### Terminal Session
 
-```
-$ curl http://localhost:8420/health
-{
-  "status": "ok",
-  "contacts": 142,
-  "last_enrichment": "2025-03-18T22:15:00Z"
-}
+See [`docs/demo-session.md`](docs/demo-session.md) for the exact command/output transcript.
 
-$ curl -X POST http://localhost:8420/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "typescript engineers", "limit": 3}'
-{
-  "results": [
-    {
-      "name": "alex_dev",
-      "tier": "top",
-      "scores": {
-        "technical_depth": 5,
-        "forecasting_quant": 3,
-        "operational_reliability": 4,
-        "ecosystem_signal": 3
-      },
-      "total_score": 15,
-      "activity": "8 tasks completed, 45 GitHub commits (30d)"
-    },
-    {
-      "name": "jordan_web3",
-      "tier": "top",
-      "scores": {
-        "technical_depth": 4,
-        "forecasting_quant": 3,
-        "operational_reliability": 3,
-        "ecosystem_signal": 3
-      },
-      "total_score": 13,
-      "activity": "5 tasks completed, 33 GitHub commits (30d)"
-    },
-    {
-      "name": "sam_fullstack",
-      "tier": "mid",
-      "scores": {
-        "technical_depth": 3,
-        "forecasting_quant": 2,
-        "operational_reliability": 3,
-        "ecosystem_signal": 2
-      },
-      "total_score": 10,
-      "activity": "3 tasks completed, 28 GitHub commits (30d)"
-    }
-  ],
-  "count": 3,
-  "total": 12
-}
-
-$ curl http://localhost:8420/profile/alex_dev
-{
-  "name": "alex_dev",
-  "tier": "top",
-  "total_score": 15,
-  "scores": {
-    "technical_depth": 5,
-    "forecasting_quant": 3,
-    "operational_reliability": 4,
-    "ecosystem_signal": 3
-  },
-  "bio": "Full-stack TypeScript engineer, XRPL hooks and agent framework contributor",
-  "github": {
-    "commits_30d": 45,
-    "prs_merged": 6,
-    "top_repos": ["pft-chatbot-mcp", "agenticity"],
-    "languages": {"TypeScript": 82, "Python": 18}
-  },
-  "postfiat": {
-    "tasks_completed": 8,
-    "tasks_in_progress": 1,
-    "joined": "2024-11-15"
-  }
-}
-```
-
-> For a live demo, run the bot locally following the setup instructions above.
+> Captured from a live local instance.
 
 ---
 
@@ -292,7 +226,9 @@ pip install -r requirements.txt
 export PF_SCOUT_GITHUB_TOKEN=your-github-token
 export PF_SCOUT_PF_JWT_TOKEN=your-postfiat-jwt
 
-python -m uvicorn main:app --reload --port 8420
+# Run from repo root so package-style imports resolve
+cd ..
+python3 -m uvicorn scout-api.main:app --reload --port 8420
 ```
 
 API docs available at `http://localhost:8420/docs`

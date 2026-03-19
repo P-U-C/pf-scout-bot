@@ -18,6 +18,7 @@ import { queryScout } from "./scout-client.js";
 import { formatResponse } from "./responder.js";
 import { config } from "./config.js";
 import { checkRateLimit, pruneExpiredBuckets, type WalletTier } from "./rate-limit.js";
+import { resolveFollowUp, setSession } from "./session.js";
 
 // ---------------------------------------------------------------------------
 // Wallet tier resolution
@@ -110,13 +111,16 @@ async function main(): Promise<void> {
           }
 
           // ── Route + query ────────────────────────────────────────────────
-          const query = parseQuery(msg.content);
+          const followUpQuery = resolveFollowUp(msg.sender, msg.content);
+          const query = followUpQuery ?? parseQuery(msg.content);
 
           // Pass requester wallet to scout-api for field-level visibility filtering
           if (!query.params) query.params = {};
           query.params.requester_wallet = msg.sender;
 
           const rawResult = await queryScout(query);
+          setSession(msg.sender, query, rawResult);
+
           const response = await formatResponse(query, rawResult);
 
           const txHash = await sendMessage(client, wallet, msg.sender, response);

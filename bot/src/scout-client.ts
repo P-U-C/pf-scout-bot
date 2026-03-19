@@ -36,6 +36,11 @@ export async function queryScout(q: ScoutQuery): Promise<unknown> {
       if (q.limit !== undefined) body["limit"] = q.limit;
       if (q.tier !== undefined) body["tier"] = q.tier;
       if (q.rubric !== undefined) body["rubric"] = q.rubric;
+      if (q.params) {
+        for (const [key, value] of Object.entries(q.params)) {
+          body[key] = value;
+        }
+      }
 
       const res = await fetchWithTimeout(`${base}/search`, {
         method: "POST",
@@ -53,8 +58,12 @@ export async function queryScout(q: ScoutQuery): Promise<unknown> {
       if (!q.identifier) {
         throw new Error("profile query missing identifier");
       }
+
+      const params = new URLSearchParams(q.params ?? {});
+      const qs = params.toString() ? `?${params.toString()}` : "";
+
       const res = await fetchWithTimeout(
-        `${base}/profile/${encodeURIComponent(q.identifier)}`
+        `${base}/profile/${encodeURIComponent(q.identifier)}${qs}`
       );
       if (!res.ok) {
         throw new Error(`/profile returned HTTP ${res.status}`);
@@ -63,7 +72,7 @@ export async function queryScout(q: ScoutQuery): Promise<unknown> {
     }
 
     case "list": {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams(q.params ?? {});
       if (q.tier) params.set("tier", q.tier);
       if (q.limit !== undefined) params.set("limit", String(q.limit));
       const qs = params.toString() ? `?${params.toString()}` : "";
