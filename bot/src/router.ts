@@ -28,7 +28,8 @@ export function parseQuery(message: string): ScoutQuery {
     /\bprofile\b/.test(lower) ||
     /\bshow me\b/.test(lower) ||
     /\bwho is\b/.test(lower) ||
-    /\btell me about\b/.test(lower);
+    /\btell me about\b/.test(lower) ||
+    /\bwhat do you know about\b/.test(lower);
 
   const handleMatch = message.match(HANDLE_RE);
 
@@ -39,8 +40,8 @@ export function parseQuery(message: string): ScoutQuery {
     return { type: "profile", identifier };
   }
 
-  // --- list ----------------------------------------------------------------
-  if (/\b(list|top|rank|ranked|leaderboard|best)\b/.test(lower)) {
+  // --- list / stats --------------------------------------------------------
+  if (/\b(list|top|rank|ranked|leaderboard|best|stats|statistics|how many|network|activity)\b/.test(lower)) {
     const tierMatch = lower.match(/\b(tier[- _]?[123]|top|active|new)\b/);
     const limitMatch = lower.match(/\b(\d+)\b/);
     return {
@@ -63,7 +64,7 @@ export function parseQuery(message: string): ScoutQuery {
 // ---------------------------------------------------------------------------
 
 function containsSearchSignals(lower: string): boolean {
-  return /\b(find|search|look|developer|engineer|contributor|typescript|python|rust|solana|xrpl)\b/.test(
+  return /\b(find|search|look|discover|who|developer|engineer|contributor|typescript|python|rust|solana|xrpl)\b/.test(
     lower
   );
 }
