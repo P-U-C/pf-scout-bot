@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import auth_tier, health, list_contacts, profile, search
+from .routes import auth_tier, health, list_contacts, profile, search, chain
 
 app = FastAPI(
     title="pf-scout API",
@@ -22,6 +22,7 @@ app.include_router(auth_tier.router, prefix="/auth", tags=["auth"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(profile.router, prefix="/profile", tags=["profile"])
 app.include_router(list_contacts.router, prefix="/list", tags=["list"])
+app.include_router(chain.router, prefix="/chain", tags=["chain"])
 
 if __name__ == "__main__":
     import uvicorn

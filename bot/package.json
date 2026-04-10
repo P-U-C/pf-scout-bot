@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
+    "@postfiatorg/pft-chatbot-mcp": "^0.5.1",
     "openai": "^4.0.0",
     "xrpl": "^4.2.0"
   },

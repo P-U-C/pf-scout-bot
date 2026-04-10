@@ -1,154 +1,168 @@
 /**
- * chain.ts — XRPL scanning and message sending.
+ * chain.ts — PFTL chain I/O using pft-chatbot-mcp internals.
  *
- * Plain-text memos only (v0). Encrypted Keystone support can be layered on
- * top later by swapping the decode step.
+ * Uses the same encryption/decryption, scanning, and submission code
+ * as the official pft-chatbot-mcp MCP server — ensuring full compatibility
+ * with the Task Node message format (keystone v1 envelopes).
  */
 
-import { Client, Wallet, xrpToDrops } from "xrpl";
-import type { AccountTxTransaction } from "xrpl";
+// Import from pft-chatbot-mcp internals
+import { scanMessages as mpcScan } from "@postfiatorg/pft-chatbot-mcp/dist/chain/scanner.js";
+import { decryptPayload, hasRecipientShard } from "@postfiatorg/pft-chatbot-mcp/dist/crypto/decrypt.js";
+import { deriveBotKeypair, type BotKeypair } from "@postfiatorg/pft-chatbot-mcp/dist/crypto/keys.js";
 import type { InboundMessage } from "./types.js";
 
-const MEMO_ENCODING = "text/plain";
-const MIN_XRP_DROPS = xrpToDrops("0.001");
+const RIPPLE_EPOCH = 946684800;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function hexToUtf8(hex: string): string {
-  const bytes = Buffer.from(hex, "hex");
-  return bytes.toString("utf8");
+export interface ChainConfig {
+  pftlRpcUrl: string;
+  pftlWssUrl: string;
+  ipfsGatewayUrl: string;
+  keystoneGrpcUrl: string;
+  keystoneApiKey: string;
+  tasknodeEncryptionPubkey: string;
 }
 
-function utf8ToHex(text: string): string {
-  return Buffer.from(text, "utf8").toString("hex").toUpperCase();
-}
-
-function extractMemoText(tx: AccountTxTransaction): string | null {
-  const txData = tx.tx_json as Record<string, unknown>;
-  if (!txData) return null;
-
-  const memos = txData["Memos"] as Array<{ Memo: { MemoData?: string; MemoType?: string } }> | undefined;
-  if (!Array.isArray(memos) || memos.length === 0) return null;
-
-  for (const memoWrapper of memos) {
-    const memo = memoWrapper?.Memo;
-    if (!memo?.MemoData) continue;
-
-    try {
-      const text = hexToUtf8(memo.MemoData);
-      return text;
-    } catch {
-      // skip malformed memos
-    }
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+export type BotKeys = BotKeypair;
 
 /**
- * Scan the bot's account for inbound Payment transactions that carry memos.
- * Returns messages received *after* sinceledger (exclusive), or all recent
- * if sinceledger is undefined.
+ * Initialize bot keypair from seed (mnemonic or secret).
  */
-export async function scanMessages(
-  client: Client,
-  wallet: Wallet,
-  sinceledger?: number
-): Promise<InboundMessage[]> {
-  const response = await client.request({
-    command: "account_tx",
-    account: wallet.classicAddress,
-    limit: 100,
-    ledger_index_min: sinceledger !== undefined ? sinceledger + 1 : -1,
-    ledger_index_max: -1,
-    forward: false,
+export async function initBotKeys(seed: string): Promise<BotKeys> {
+  return await deriveBotKeypair(seed.trim());
+}
+
+/**
+ * Scan for new inbound messages using pft-chatbot-mcp's scanner.
+ * Handles both pf.ptr and keystone envelope formats.
+ * Decrypts messages automatically using the bot's key.
+ */
+export async function scanInbound(
+  chainConfig: ChainConfig,
+  botKeys: BotKeys,
+  sinceLedger?: number,
+): Promise<{ messages: InboundMessage[]; nextLedger: number }> {
+  const config = {
+    pftlRpcUrl: chainConfig.pftlRpcUrl,
+    pftlWssUrl: chainConfig.pftlWssUrl,
+    ipfsGatewayUrl: chainConfig.ipfsGatewayUrl,
+  };
+
+  const rawMessages = await mpcScan(config, botKeys.address, {
+    sinceLedger,
+    limit: 50,
+    direction: "inbound",
   });
 
   const messages: InboundMessage[] = [];
+  let maxLedger = sinceLedger ?? 0;
 
-  for (const entry of response.result.transactions) {
-    const txJson = entry.tx_json as Record<string, unknown>;
-    if (!txJson) continue;
+  for (const msg of rawMessages) {
+    if (msg.ledgerIndex > maxLedger) maxLedger = msg.ledgerIndex;
 
-    // Only care about incoming Payments
-    if (txJson["TransactionType"] !== "Payment") continue;
-    if (txJson["Destination"] !== wallet.classicAddress) continue;
+    // Try to decrypt and get content
+    let content = "";
+    if (msg.cid && msg.isEncrypted) {
+      try {
+        const payloadUrl = `${chainConfig.ipfsGatewayUrl}/ipfs/${msg.cid}`;
+        const resp = await fetch(payloadUrl, { signal: AbortSignal.timeout(10000) });
+        const blob = await resp.json();
+        const decrypted = await decryptPayload(blob, botKeys.x25519PrivateKey, botKeys.x25519PublicKey);
+        content = typeof decrypted === "string" ? decrypted : JSON.stringify(decrypted);
+      } catch {
+        // Can't decrypt — might not be addressed to us
+        content = "";
+      }
+    } else if (msg.cid && !msg.isEncrypted) {
+      try {
+        const payloadUrl = `${chainConfig.ipfsGatewayUrl}/ipfs/${msg.cid}`;
+        const resp = await fetch(payloadUrl, { signal: AbortSignal.timeout(10000) });
+        content = await resp.text();
+      } catch {
+        content = "";
+      }
+    }
 
-    // Skip outgoing (sent by ourselves)
-    if (txJson["Account"] === wallet.classicAddress) continue;
+    if (!content || content.trim().length === 0) continue;
 
-    const content = extractMemoText(entry);
-    if (!content) continue;
-
-    const ledgerIndex =
-      typeof entry.ledger_index === "number"
-        ? entry.ledger_index
-        : typeof txJson["ledger_index"] === "number"
-        ? (txJson["ledger_index"] as number)
-        : 0;
-
-    const closeTimeIso =
-      typeof txJson["date"] === "number"
-        ? new Date((txJson["date"] as number + 946684800) * 1000).toISOString()
-        : new Date().toISOString();
+    // Extract text from decrypted content (may be JSON with a text field)
+    let text = content;
+    try {
+      const parsed = JSON.parse(content);
+      text = parsed.text ?? parsed.message ?? parsed.content ?? content;
+    } catch {
+      // Content is plain text
+    }
 
     messages.push({
-      txHash: (txJson["hash"] as string | undefined) ?? "",
-      sender: txJson["Account"] as string,
-      content,
-      ledgerIndex,
-      timestampIso: closeTimeIso,
+      txHash: msg.txHash || "",
+      sender: msg.sender,
+      content: text.trim(),
+      ledgerIndex: msg.ledgerIndex,
+      timestampIso: msg.timestampIso || new Date().toISOString(),
     });
   }
 
-  return messages;
+  return { messages, nextLedger: maxLedger };
+}
+
+// Cache the KeystoneClient and Config so we don't recreate per message
+let _grpcClient: any = null;
+let _mpcConfig: any = null;
+
+async function getGrpcClient(chainConfig: ChainConfig, botSeed: string) {
+  if (_grpcClient && _mpcConfig) return { grpcClient: _grpcClient, mpcConfig: _mpcConfig };
+
+  const { KeystoneClient } = await import("@postfiatorg/pft-chatbot-mcp/dist/grpc/client.js");
+
+  _mpcConfig = {
+    botSeed: botSeed,
+    pftlRpcUrl: chainConfig.pftlRpcUrl,
+    pftlWssUrl: chainConfig.pftlWssUrl,
+    ipfsGatewayUrl: chainConfig.ipfsGatewayUrl,
+    keystoneGrpcUrl: chainConfig.keystoneGrpcUrl,
+    keystoneApiKey: chainConfig.keystoneApiKey || null,
+    pingIntervalMs: 0,
+    tasknodeEncryptionKey: null,
+    tasknodeKeySource: null,
+  };
+
+  _grpcClient = new KeystoneClient(_mpcConfig);
+  return { grpcClient: _grpcClient, mpcConfig: _mpcConfig };
 }
 
 /**
- * Send a plain-text memo back to a user on XRPL.
- * Returns the tx hash of the submitted transaction.
+ * Send an encrypted reply to a user using the keystone envelope format.
+ * Compatible with the Task Node UI.
+ *
+ * Uses pft-chatbot-mcp's executeSendMessage which handles:
+ *   encrypt → upload to IPFS via Keystone gRPC → build keystone envelope → submit Payment
  */
-export async function sendMessage(
-  client: Client,
-  wallet: Wallet,
+export async function sendReply(
+  chainConfig: ChainConfig,
+  botKeys: BotKeys,
   toAddress: string,
-  content: string
+  content: string,
+  botSeed: string,
 ): Promise<string> {
-  // XRPL memo field size is limited; truncate defensively to ~980 bytes
-  const safeContent =
-    Buffer.byteLength(content, "utf8") > 980
-      ? content.slice(0, 960) + "…"
-      : content;
-
-  const tx = {
-    TransactionType: "Payment" as const,
-    Account: wallet.classicAddress,
-    Destination: toAddress,
-    Amount: MIN_XRP_DROPS,
-    Memos: [
-      {
-        Memo: {
-          MemoType: utf8ToHex(MEMO_ENCODING),
-          MemoData: utf8ToHex(safeContent),
-        },
-      },
-    ],
-  };
-
-  const prepared = await client.autofill(tx);
-  const signed = wallet.sign(prepared);
-  const result = await client.submitAndWait(signed.tx_blob);
-
-  const meta = result.result.meta as Record<string, unknown> | undefined;
-  const txResult = meta?.["TransactionResult"];
-  if (txResult !== "tesSUCCESS") {
-    throw new Error(`Transaction failed: ${txResult}`);
+  if (!content || content.trim().length === 0) {
+    content = "No response available.";
   }
 
-  return (result.result.tx_json as Record<string, unknown>)["hash"] as string ?? signed.hash;
+  if (content.length > 2000) {
+    content = content.substring(0, 1950) + "…";
+  }
+
+  const { executeSendMessage } = await import(
+    "@postfiatorg/pft-chatbot-mcp/dist/tools/send_message.js"
+  );
+
+  const { grpcClient, mpcConfig } = await getGrpcClient(chainConfig, botSeed);
+
+  const txHash = await executeSendMessage(mpcConfig, botKeys, grpcClient, {
+    recipient: toAddress,
+    message: content,
+  });
+
+  return txHash ?? "unknown";
 }

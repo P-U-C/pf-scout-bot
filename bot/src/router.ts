@@ -40,8 +40,22 @@ export function parseQuery(message: string): ScoutQuery {
     return { type: "profile", identifier };
   }
 
-  // --- list / stats --------------------------------------------------------
-  if (/\b(list|top|rank|ranked|leaderboard|best|stats|statistics|how many|network|activity)\b/.test(lower)) {
+  // --- richlist -------------------------------------------------------------
+  if (/\b(rich|richlist|rich list|holders|whales|balances)\b/.test(lower)) {
+    const limitMatch = lower.match(/\b(\d+)\b/);
+    return {
+      type: "richlist",
+      limit: limitMatch ? Math.min(parseInt(limitMatch[1], 10), 20) : 10,
+    };
+  }
+
+  // --- stats ---------------------------------------------------------------
+  if (/\b(stats|statistics|how many|network|overview)\b/.test(lower)) {
+    return { type: "stats" };
+  }
+
+  // --- list ----------------------------------------------------------------
+  if (/\b(list|top|rank|ranked|leaderboard|best|active|activity)\b/.test(lower)) {
     const tierMatch = lower.match(/\b(tier[- _]?[123]|top|active|new)\b/);
     const limitMatch = lower.match(/\b(\d+)\b/);
     return {

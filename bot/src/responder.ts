@@ -100,6 +100,26 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
 
   if (query.type === "profile") {
     const p = raw as Record<string, unknown>;
+    // Chain profile format
+    if (p["address"]) {
+      const addr = String(p["address"]);
+      const short = addr.substring(0, 8) + "..." + addr.substring(addr.length - 6);
+      const memos = p["memo_tx_count"] ?? 0;
+      const peers = p["peer_count"] ?? 0;
+      const score = p["activity_score"] ?? 0;
+      const sybil = p["sybil_cluster"] ? ` [SYBIL: ${p["sybil_cluster"]}]` : "";
+      const cps = (p["top_counterparties"] as Array<Record<string, unknown>> ?? []).slice(0, 3);
+      const cpLines = cps.map(cp => {
+        const cpAddr = String(cp["address"] ?? "");
+        return `  ${cpAddr.substring(0, 10)}... (${cp["memos"]} memos)`;
+      }).join("\n");
+      return truncate(
+        `${short}${sybil}\nActivity: ${score} | Memos: ${memos} | Peers: ${peers}\n` +
+        (cpLines ? `Top peers:\n${cpLines}` : ""),
+        400
+      );
+    }
+    // Legacy contacts format
     const name = p["name"] ?? p["identifier"] ?? "Unknown";
     const tier = p["tier"] ?? "—";
     const score = p["score"] ?? p["total_score"] ?? "—";
@@ -110,16 +130,56 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
   if (query.type === "list" || query.type === "search") {
     const items = Array.isArray(raw) ? raw : (raw as Record<string, unknown>)["results"] ?? [];
     const arr = items as Array<Record<string, unknown>>;
-    const top = arr.slice(0, 3);
+    if (arr.length === 0) {
+      return "No results found. Try broadening your search. Type 'help' for usage.";
+    }
+    const top = arr.slice(0, 5);
     const lines = top.map((p, i) => {
+      // Chain wallet format
+      if (p["address"]) {
+        const addr = String(p["address"]);
+        const short = addr.substring(0, 10) + "...";
+        const memos = p["memo_tx_count"] ?? 0;
+        const peers = p["peer_count"] ?? 0;
+        const sybil = p["sybil_flagged"] ? " ⚠" : "";
+        return `${i + 1}. ${short} ${memos} memos, ${peers} peers${sybil}`;
+      }
+      // Legacy contacts format
       const name = p["name"] ?? p["identifier"] ?? `Result ${i + 1}`;
       const tier = p["tier"] ? ` [${p["tier"]}]` : "";
       const score = p["score"] !== undefined ? ` (${p["score"]})` : "";
       return `${i + 1}. ${name}${tier}${score}`;
     });
-    const suffix =
-      arr.length > 3 ? "\nReply with a handle for full profile." : "";
-    return truncate(lines.join("\n") + suffix, 400);
+    const header = `Top ${top.length} active wallets:\n`;
+    const suffix = arr.length > 5 ? "\nSend wallet address for full profile." : "";
+    return truncate(header + lines.join("\n") + suffix, 400);
+  }
+
+  if (query.type === "richlist") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["richlist"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No balance data available.";
+    const lines = items.slice(0, 10).map((p) => {
+      const addr = String(p["address"] ?? "");
+      const short = addr.substring(0, 10) + "...";
+      const bal = Number(p["balance_pft"] ?? 0);
+      const fmt = bal >= 1_000_000 ? `${(bal / 1_000_000).toFixed(1)}M` : bal >= 1000 ? `${(bal / 1000).toFixed(0)}K` : bal.toFixed(0);
+      return `${p["rank"]}. ${short} ${fmt} PFT`;
+    });
+    return truncate("PFT Rich List:\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "stats") {
+    const s = raw as Record<string, unknown>;
+    return truncate(
+      `Network Stats:\n` +
+      `Accounts: ${s["total_accounts"]} (${s["active_accounts"]} active)\n` +
+      `Transactions: ${s["total_transactions"]} (${s["memo_transactions"]} memos)\n` +
+      `Edges: ${s["total_edges"]}\n` +
+      `Sybil clusters: ${s["sybil_clusters"]}\n` +
+      `Last crawl: ${s["last_crawl"] ?? "never"}`,
+      400
+    );
   }
 
   return "Unknown query type.";
@@ -129,14 +189,16 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
 // Help response (no API call needed)
 // ---------------------------------------------------------------------------
 
-function helpResponse(botName: string): string {
+function helpResponse(_botName: string): string {
   return (
-    `${botName} — contributor intelligence for Post Fiat.\n` +
-    "Commands:\n" +
-    "  find <skill/role>       Search contributors\n" +
-    "  list [tier1|tier2]      Ranked list\n" +
-    "  profile @handle         Full profile\n" +
-    "  help                    This message"
+    "Lens — on-chain intelligence for Post Fiat.\n" +
+    "Verified from chain data. Not self-reported.\n\n" +
+    "/list          Top active wallets\n" +
+    "/richlist      Top PFT holders\n" +
+    "/profile <addr>  Wallet detail + sybil\n" +
+    "/find <query>  Search wallets\n" +
+    "/stats         Network overview\n" +
+    "/help          This message"
   );
 }
 

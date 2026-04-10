@@ -7,7 +7,7 @@ export interface InboundMessage {
 }
 
 export interface ScoutQuery {
-  type: "search" | "profile" | "list" | "help";
+  type: "search" | "profile" | "list" | "richlist" | "help" | "stats";
   query?: string;
   identifier?: string;  // for profile lookups (handle, r-address, …)
   tier?: string;

@@ -1,18 +1,13 @@
 /**
  * index.ts — PF Scout Bot entry point.
  *
- * Polls the XRPL every POLL_INTERVAL_MS for new inbound messages to the bot's
- * wallet address, routes them through the scout-api, formats responses with an
- * LLM (or template fallback), and sends them back on-chain.
+ * Polls the PFTL chain for inbound encrypted messages,
+ * routes queries through the scout-api, and sends encrypted replies.
  *
- * Security: per-wallet rate limiting enforced before any scout-api call.
- *   UNKNOWN    → 10 queries / hour
- *   AUTHORIZED → 60 queries / hour
- *   TRUSTED    → unlimited
+ * Uses pft-chatbot-mcp for full keystone envelope compatibility.
  */
 
-import { Client, Wallet } from "xrpl";
-import { scanMessages, sendMessage } from "./chain.js";
+import { initBotKeys, scanInbound, sendReply, type ChainConfig } from "./chain.js";
 import { parseQuery } from "./router.js";
 import { queryScout } from "./scout-client.js";
 import { formatResponse } from "./responder.js";
@@ -22,142 +17,142 @@ import { resolveFollowUp, setSession } from "./session.js";
 
 // ---------------------------------------------------------------------------
 // Wallet tier resolution
-// Calls scout-api GET /auth/tier?wallet=<address> — falls back to UNKNOWN.
 // ---------------------------------------------------------------------------
 async function resolveWalletTier(wallet: string): Promise<WalletTier> {
   try {
     const url = `${config.scoutApiUrl}/auth/tier?wallet=${encodeURIComponent(wallet)}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(3000) });
     if (resp.ok) {
-      const data = await resp.json() as { tier?: string };
+      const data = (await resp.json()) as { tier?: string };
       const tier = data.tier?.toUpperCase() as WalletTier | undefined;
-      if (tier && ["TRUSTED", "AUTHORIZED", "UNKNOWN", "COOLDOWN", "SUSPENDED"].includes(tier)) {
-        return tier;
-      }
+      if (tier === "AUTHORIZED" || tier === "TRUSTED") return tier;
     }
   } catch {
-    // scout-api unreachable or timeout — default to UNKNOWN (safe)
+    // Fall through to UNKNOWN
   }
   return "UNKNOWN";
 }
 
 async function main(): Promise<void> {
   if (!config.botSeed) {
-    console.error(
-      "ERROR: BOT_SEED env var is required. Generate one with xrpl-keygen or pft-chatbot-mcp."
-    );
+    console.error("ERROR: BOT_SEED env var is required.");
     process.exit(1);
   }
 
-  console.log(`Connecting to XRPL at ${config.xrplServer}…`);
-  const client = new Client(config.xrplServer);
+  console.log("Initializing bot keys...");
+  const botKeys = await initBotKeys(config.botSeed);
+  console.log(`PF Scout bot running as ${botKeys.address}`);
 
-  client.on("disconnected", () => {
-    console.warn("XRPL disconnected — will attempt to reconnect on next poll.");
-  });
+  const chainConfig: ChainConfig = {
+    pftlRpcUrl: process.env.PFTL_RPC_URL ?? "https://rpc.testnet.postfiat.org",
+    pftlWssUrl: config.xrplServer,
+    ipfsGatewayUrl: process.env.IPFS_GATEWAY_URL ?? "https://ipfs-testnet.postfiat.org",
+    keystoneGrpcUrl: process.env.KEYSTONE_GRPC_URL ?? "keystone-grpc.postfiat.org:443",
+    keystoneApiKey: process.env.KEYSTONE_API_KEY ?? "",
+    tasknodeEncryptionPubkey: process.env.TASKNODE_ENCRYPTION_PUBKEY ?? "",
+  };
 
-  await client.connect();
-
-  // Support both XRPL secret seeds (starts with 's') and BIP39 mnemonics
-  const wallet = config.botSeed.trim().includes(' ')
-    ? Wallet.fromMnemonic(config.botSeed.trim())
-    : Wallet.fromSeed(config.botSeed.trim());
-  console.log(`PF Scout bot running as ${wallet.classicAddress}`);
   console.log(`Polling every ${config.pollIntervalMs / 1000}s`);
   console.log(`Scout API: ${config.scoutApiUrl}`);
+  console.log(`PFTL RPC: ${chainConfig.pftlRpcUrl}`);
 
-  let sinceledger: number | undefined;
+  let sinceLedger: number | undefined;
   let pruneCounter = 0;
+  const processedTxHashes = new Set<string>(); // Prevent replays
 
   // Graceful shutdown
   let running = true;
   process.on("SIGINT", () => {
     console.log("\nShutting down…");
     running = false;
-    client.disconnect().finally(() => process.exit(0));
+    process.exit(0);
   });
   process.on("SIGTERM", () => {
     running = false;
-    client.disconnect().finally(() => process.exit(0));
+    process.exit(0);
   });
 
   while (running) {
     try {
-      if (!client.isConnected()) {
-        console.log("Reconnecting to XRPL…");
-        await client.connect();
+      const { messages, nextLedger } = await scanInbound(chainConfig, botKeys, sinceLedger);
+
+      if (nextLedger > (sinceLedger ?? 0)) {
+        sinceLedger = nextLedger + 1; // +1 to avoid re-processing same ledger
       }
 
-      const messages = await scanMessages(client, wallet, sinceledger);
       console.log(
         `[${new Date().toISOString()}] Scanned — ${messages.length} new message(s)`
       );
 
       for (const msg of messages) {
-        if (sinceledger === undefined || msg.ledgerIndex > sinceledger) {
-          sinceledger = msg.ledgerIndex;
-        }
+        // Skip our own outbound messages
+        if (msg.sender === botKeys.address) continue;
+        // Skip already-processed messages
+        if (msg.txHash && processedTxHashes.has(msg.txHash)) continue;
+        if (msg.txHash) processedTxHashes.add(msg.txHash);
 
         console.log(
           `  ← from ${msg.sender} (ledger ${msg.ledgerIndex}): ${msg.content.slice(0, 80)}`
         );
 
         try {
-          // ── Rate limiting ────────────────────────────────────────────────
+          // ── Rate limiting ──
           const tier = await resolveWalletTier(msg.sender);
           const rateCheck = checkRateLimit(msg.sender, tier);
 
           if (!rateCheck.allowed) {
-            await sendMessage(client, wallet, msg.sender, rateCheck.message);
-            console.log(`  ⏱ rate limited ${msg.sender} (${tier}): ${rateCheck.message}`);
+            await sendReply(chainConfig, botKeys, msg.sender, rateCheck.message, config.botSeed);
             continue;
           }
 
-          // ── Route + query ────────────────────────────────────────────────
-          const followUpQuery = resolveFollowUp(msg.sender, msg.content);
-          const query = followUpQuery ?? parseQuery(msg.content);
+          // ── Follow-up resolution ──
+          const resolved = resolveFollowUp(msg.sender, msg.content);
+          const queryText = resolved ?? msg.content;
 
-          // Pass requester wallet to scout-api for field-level visibility filtering
-          if (!query.params) query.params = {};
-          query.params.requester_wallet = msg.sender;
+          // ── Route to scout-api ──
+          const parsed = parseQuery(queryText);
+          console.log(`  [debug] parsed query: ${JSON.stringify(parsed)}`);
+          const scoutResult = await queryScout(parsed);
 
-          const rawResult = await queryScout(query);
-          setSession(msg.sender, query, rawResult);
+          // ── Format response ──
+          const response = await formatResponse(parsed, scoutResult);
 
-          const response = await formatResponse(query, rawResult);
+          // ── Update session ──
+          setSession(msg.sender, queryText, scoutResult);
 
-          const txHash = await sendMessage(client, wallet, msg.sender, response);
-          console.log(
-            `  → sent to ${msg.sender} (${tier}, tx: ${txHash.slice(0, 16)}…): ${response.slice(0, 80)}`
-          );
-        } catch (msgErr) {
-          console.error(`  ! Error handling message from ${msg.sender}:`, msgErr);
+          // ── Send reply on-chain (encrypted) ──
+          const txHash = await sendReply(chainConfig, botKeys, msg.sender, response, config.botSeed);
+          console.log(`  → sent to ${msg.sender} (${tier}, tx: ${txHash.substring(0, 16)}…)`);
+
+        } catch (err) {
+          console.error(`  ! Error handling message from ${msg.sender}:`, err);
           try {
-            await sendMessage(
-              client,
-              wallet,
-              msg.sender,
-              "Sorry, an error occurred processing your query. Please try again."
+            await sendReply(
+              chainConfig, botKeys, msg.sender,
+              "Sorry, an error occurred processing your query. Please try again.", config.botSeed
             );
           } catch {
-            // ignore send failure
+            // Swallow send error
           }
         }
       }
 
-      // Prune expired rate limit buckets every 60 polls (~1 hour at 60s interval)
-      if (++pruneCounter % 60 === 0) {
+      // Prune rate limit buckets every 10 cycles
+      pruneCounter++;
+      if (pruneCounter >= 10) {
         pruneExpiredBuckets();
+        pruneCounter = 0;
       }
     } catch (err) {
-      console.error("Poll error:", err);
+      console.error(`[${new Date().toISOString()}] Poll error:`, err);
     }
 
-    await new Promise<void>((r) => setTimeout(r, config.pollIntervalMs));
+    // Wait for next poll
+    await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
   }
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  console.error("Fatal:", err);
   process.exit(1);
 });
