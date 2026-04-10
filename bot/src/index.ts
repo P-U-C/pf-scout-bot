@@ -58,7 +58,10 @@ async function main(): Promise<void> {
 
   await client.connect();
 
-  const wallet = Wallet.fromSeed(config.botSeed);
+  // Support both XRPL secret seeds (starts with 's') and BIP39 mnemonics
+  const wallet = config.botSeed.trim().includes(' ')
+    ? Wallet.fromMnemonic(config.botSeed.trim())
+    : Wallet.fromSeed(config.botSeed.trim());
   console.log(`PF Scout bot running as ${wallet.classicAddress}`);
   console.log(`Polling every ${config.pollIntervalMs / 1000}s`);
   console.log(`Scout API: ${config.scoutApiUrl}`);

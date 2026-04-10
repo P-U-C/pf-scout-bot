@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     github_token: str = ""
     log_level: str = "info"
 
-    model_config = {"env_file": ".env", "env_prefix": "PF_SCOUT_"}
+    model_config = {"env_file": ".env", "env_prefix": "PF_SCOUT_", "extra": "ignore"}
 
 
 settings = Settings()

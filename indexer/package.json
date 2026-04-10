@@ -1,0 +1,22 @@
+{
+  "name": "@p-u-c/pftl-chain-indexer",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "index": "tsx src/index.ts",
+    "crawl": "tsx src/index.ts crawl",
+    "backfill": "tsx src/index.ts backfill",
+    "sybil": "tsx src/index.ts sybil",
+    "export": "tsx src/index.ts export",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "xrpl": "^4.1.0",
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

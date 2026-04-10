@@ -1,0 +1,12 @@
+[Unit]
+Description=PFTL Chain Indexer — daily crawl + sybil analysis
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/pf-scout-bot/indexer
+ExecStart=/usr/bin/npx tsx src/index.ts all
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pftl-indexer
