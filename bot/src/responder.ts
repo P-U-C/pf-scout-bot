@@ -162,11 +162,121 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
     const lines = items.slice(0, 10).map((p) => {
       const addr = String(p["address"] ?? "");
       const short = addr.substring(0, 10) + "...";
+      const label = p["label"] ? ` (${p["label"]})` : "";
       const bal = Number(p["balance_pft"] ?? 0);
       const fmt = bal >= 1_000_000 ? `${(bal / 1_000_000).toFixed(1)}M` : bal >= 1000 ? `${(bal / 1000).toFixed(0)}K` : bal.toFixed(0);
-      return `${p["rank"]}. ${short} ${fmt} PFT`;
+      return `${p["rank"]}. ${short}${label} ${fmt} PFT`;
     });
-    return truncate("PFT Rich List:\n" + lines.join("\n"), 400);
+    return truncate("PFT Rich List (users only):\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "infra") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["infrastructure"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No infrastructure wallets tagged.";
+    const lines = items.map((p) => {
+      const addr = String(p["address"] ?? "");
+      const short = addr.substring(0, 10) + "...";
+      const bal = Number(p["balance_pft"] ?? 0);
+      const fmt = bal >= 1_000_000 ? `${(bal / 1_000_000).toFixed(1)}M` : bal >= 1000 ? `${(bal / 1000).toFixed(0)}K` : bal.toFixed(0);
+      return `${p["label"]}: ${short} ${fmt} PFT`;
+    });
+    return truncate("Infrastructure Wallets:\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "tag") {
+    const data = raw as Record<string, unknown>;
+    if (data["error"]) return String(data["error"]);
+    if (data["tagged"]) {
+      const addr = String(data["address"] ?? "");
+      const short = addr.substring(0, 12) + "...";
+      return `Tagged ${short} as "${data["label"]}"`;
+    }
+    return "Tag failed.";
+  }
+
+  if (query.type === "network") {
+    return "Lens — live network graph:\nhttps://pft.permanentupperclass.com/lens/\n\n87 wallets. 1,005 relationships.\nFilters, focus/dim, relationship inspector.";
+  }
+
+  if (query.type === "pulse") {
+    const s = raw as Record<string, unknown>;
+    return truncate(
+      `Network Pulse:\n` +
+      `${s["wallets"]} wallets | ${s["relationships"]} edges | ${s["memos"]} memos\n` +
+      `Sybil clusters: ${s["sybil_clusters"]}\n` +
+      `Concentration: ${s["concentration_hhi"]} (${s["health"]})\n` +
+      `Graph: ${s["lens_url"] || "pft.permanentupperclass.com/lens/"}`,
+      400
+    );
+  }
+
+  if (query.type === "whales") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["whales"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No whale data.";
+    const lines = items.slice(0, 8).map((p) => {
+      const addr = String(p["address"] ?? "").substring(0, 10) + "...";
+      const label = p["label"] ? ` (${p["label"]})` : "";
+      const bal = fmtBal(Number(p["balance_pft"] ?? 0));
+      return `${p["rank"]}. ${addr}${label} ${bal}`;
+    });
+    return truncate("Biggest whales:\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "active") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["active"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No activity data.";
+    const lines = items.slice(0, 8).map((p) => {
+      const addr = String(p["address"] ?? "").substring(0, 10) + "...";
+      const label = p["label"] ? ` (${p["label"]})` : "";
+      return `${p["rank"]}. ${addr}${label} ${p["memos"]} msgs, ${p["txns"]} txns`;
+    });
+    return truncate("Most active (by work, not wealth):\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "earners") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["earners"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No earner data.";
+    const lines = items.slice(0, 8).map((p) => {
+      const addr = String(p["address"] ?? "").substring(0, 10) + "...";
+      const label = p["label"] ? ` (${p["label"]})` : "";
+      const bal = fmtBal(Number(p["total_received_pft"] ?? 0));
+      return `${p["rank"]}. ${addr}${label} received ${bal}`;
+    });
+    return truncate("Top earners (most PFT received):\n" + lines.join("\n"), 400);
+  }
+
+  if (query.type === "check" || query.type === "sybil_check") {
+    const d = raw as Record<string, unknown>;
+    if (d["error"]) return String(d["error"]);
+    const addr = String(d["address"] ?? "").substring(0, 12) + "...";
+    return truncate(
+      `${addr}\n` +
+      `Balance: ${fmtBal(Number(d["balance_pft"] ?? 0))}\n` +
+      `Memos: ${d["memos"]} | Txns: ${d["txns"]} | Peers: ${d["peers"]}\n` +
+      `Network share: ${d["network_share"]}%\n` +
+      `Verdict: ${d["verdict"]}`,
+      400
+    );
+  }
+
+  if (query.type === "connections") {
+    const data = raw as Record<string, unknown>;
+    const items = (data["connections"] ?? []) as Array<Record<string, unknown>>;
+    if (items.length === 0) return "No connections found.";
+    const addr = String(data["address"] ?? "").substring(0, 10) + "...";
+    const lines = items.slice(0, 6).map((p) => {
+      const peer = String(p["address"] ?? "").substring(0, 10) + "...";
+      const label = p["label"] ? ` (${p["label"]})` : "";
+      const details = [];
+      if (Number(p["memos"]) > 0) details.push(`${p["memos"]} msgs`);
+      if (Number(p["pft"]) > 0) details.push(fmtBal(Number(p["pft"])));
+      return `  ${peer}${label}: ${details.join(", ")}`;
+    });
+    return truncate(`${addr} connections:\n` + lines.join("\n"), 400);
   }
 
   if (query.type === "stats") {
@@ -191,14 +301,20 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
 
 function helpResponse(_botName: string): string {
   return (
-    "Lens — on-chain intelligence for Post Fiat.\n" +
-    "Verified from chain data. Not self-reported.\n\n" +
-    "/list          Top active wallets\n" +
-    "/richlist      Top PFT holders\n" +
-    "/profile <addr>  Wallet detail + sybil\n" +
-    "/find <query>  Search wallets\n" +
-    "/stats         Network overview\n" +
-    "/help          This message"
+    "Lens — on-chain intelligence.\n\n" +
+    "Who's here?\n" +
+    "  /whales        Biggest holders\n" +
+    "  /active        Who's working\n" +
+    "  /earners       Who got paid\n\n" +
+    "Investigate:\n" +
+    "  /check <addr>  Is this legit?\n" +
+    "  /connections <addr>  Who do they talk to?\n" +
+    "  /sybil <addr>  Sybil check\n\n" +
+    "Network:\n" +
+    "  /pulse         Heartbeat\n" +
+    "  /network       Live graph\n" +
+    "  /infra         System wallets\n" +
+    "  /tag <addr> <label>  Tag a wallet"
   );
 }
 
@@ -233,6 +349,12 @@ export async function formatResponse(
 // ---------------------------------------------------------------------------
 // Util
 // ---------------------------------------------------------------------------
+
+function fmtBal(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M PFT';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K PFT';
+  return n.toFixed(0) + ' PFT';
+}
 
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;

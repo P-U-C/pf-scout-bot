@@ -115,6 +115,16 @@ async function getGrpcClient(chainConfig: ChainConfig, botSeed: string) {
 
   const { KeystoneClient } = await import("@postfiatorg/pft-chatbot-mcp/dist/grpc/client.js");
 
+  // Decode the TaskNode's X25519 public key for message sharing
+  // This allows the TaskNode UI to decrypt and display bot replies
+  const TESTNET_TASKNODE_PUBKEY = "knyyRfO9ws9JmIHjOA7v0x4+hjflnKeGIhLVS/G0BwM=";
+  const tasknodeKeyB64 = process.env.TASKNODE_ENCRYPTION_PUBKEY || TESTNET_TASKNODE_PUBKEY;
+  let tasknodeKey: Uint8Array | null = null;
+  try {
+    tasknodeKey = new Uint8Array(Buffer.from(tasknodeKeyB64, "base64"));
+    if (tasknodeKey.length !== 32) tasknodeKey = null;
+  } catch { /* leave null */ }
+
   _mpcConfig = {
     botSeed: botSeed,
     pftlRpcUrl: chainConfig.pftlRpcUrl,
@@ -123,8 +133,8 @@ async function getGrpcClient(chainConfig: ChainConfig, botSeed: string) {
     keystoneGrpcUrl: chainConfig.keystoneGrpcUrl,
     keystoneApiKey: chainConfig.keystoneApiKey || null,
     pingIntervalMs: 0,
-    tasknodeEncryptionKey: null,
-    tasknodeKeySource: null,
+    tasknodeEncryptionKey: tasknodeKey,
+    tasknodeKeySource: tasknodeKey ? "testnet default" : null,
   };
 
   _grpcClient = new KeystoneClient(_mpcConfig);

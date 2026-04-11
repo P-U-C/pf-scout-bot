@@ -56,6 +56,9 @@ export const DEFAULT_SYBIL_CONFIG: SybilConfig = {
   whitelistedAccounts: [
     "rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7",  // Task Node hub
     "rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96",  // Daily airdrop wallet
+    "rhczhWeG3eSohzcH5jw8m8Ynca9cgH4eZm",  // Treasury
+    "rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE",  // Distribution
+    "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk",  // Distribution 2
   ],
   // Standard amounts (in drops) to exclude from amount fingerprinting
   // These are common transaction sizes that don't indicate sybil behavior

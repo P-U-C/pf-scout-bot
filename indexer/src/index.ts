@@ -16,10 +16,14 @@ import type Database from "better-sqlite3";
 
 // ─── Seed Accounts ──────────────────────────────────────────────────
 
-// Known starting points for crawling the PFTL network.
-// The crawler discovers all other accounts automatically.
+// Seed accounts for crawling the PFTL network.
+// Includes all known infrastructure + the operator wallet.
 const SEED_ACCOUNTS = [
-  "rsS2Y6CK9dz9dVFjJvRyD2gBdoLPqjaXRZ", // Known active operator
+  "rsS2Y6CK9dz9dVFjJvRyD2gBdoLPqjaXRZ", // Operator (Zoz)
+  "rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7", // Task Node hub
+  "rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96", // Airdrop wallet
+  "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk", // Distribution
+  "rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE", // Distribution 2
 ];
 
 // ─── Commands ───────────────────────────────────────────────────────

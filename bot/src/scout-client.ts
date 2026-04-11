@@ -73,6 +73,74 @@ export async function queryScout(q: ScoutQuery): Promise<unknown> {
       return res.json();
     }
 
+    case "infra": {
+      const res = await fetchWithTimeout(`${base}/chain/infra`);
+      if (!res.ok) throw new Error(`/chain/infra returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "tag": {
+      if (!q.identifier || !q.query) throw new Error("Usage: /tag <address> <label>");
+      const res = await fetchWithTimeout(`${base}/chain/tag?address=${encodeURIComponent(q.identifier)}&label=${encodeURIComponent(q.query)}&tagged_by=on-chain`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`/chain/tag returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "whales": {
+      const res = await fetchWithTimeout(`${base}/chain/whales?limit=${q.limit ?? 10}`);
+      if (!res.ok) throw new Error(`/chain/whales returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "active": {
+      const res = await fetchWithTimeout(`${base}/chain/active?limit=${q.limit ?? 10}`);
+      if (!res.ok) throw new Error(`/chain/active returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "connections": {
+      if (!q.identifier) throw new Error("Specify a wallet address");
+      const res = await fetchWithTimeout(`${base}/chain/connections/${encodeURIComponent(q.identifier)}`);
+      if (!res.ok) throw new Error(`/chain/connections returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "check": {
+      if (!q.identifier) throw new Error("Specify a wallet address to check");
+      const res = await fetchWithTimeout(`${base}/chain/check/${encodeURIComponent(q.identifier)}`);
+      if (!res.ok) throw new Error(`/chain/check returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "pulse": {
+      const res = await fetchWithTimeout(`${base}/chain/pulse`);
+      if (!res.ok) throw new Error(`/chain/pulse returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "earners": {
+      const res = await fetchWithTimeout(`${base}/chain/earners?limit=${q.limit ?? 10}`);
+      if (!res.ok) throw new Error(`/chain/earners returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "network": {
+      return { url: "https://pft.permanentupperclass.com/lens/" };
+    }
+
+    case "sybil_check": {
+      if (!q.identifier) {
+        const res = await fetchWithTimeout(`${base}/chain/sybil`);
+        if (!res.ok) throw new Error(`/chain/sybil returned HTTP ${res.status}`);
+        return res.json();
+      }
+      const res = await fetchWithTimeout(`${base}/chain/check/${encodeURIComponent(q.identifier)}`);
+      if (!res.ok) throw new Error(`/chain/check returned HTTP ${res.status}`);
+      return res.json();
+    }
+
     default:
       throw new Error(`Unknown query type: ${(q as any).type}`);
   }

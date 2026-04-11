@@ -40,6 +40,67 @@ export function parseQuery(message: string): ScoutQuery {
     return { type: "profile", identifier };
   }
 
+  // --- network (link to visualization) --------------------------------------
+  if (/\b(network|graph|visuali|map|lens)\b/.test(lower) && !/\bfind\b/.test(lower)) {
+    return { type: "network" };
+  }
+
+  // --- pulse / heartbeat ----------------------------------------------------
+  if (/\b(pulse|heartbeat|health|overview|status)\b/.test(lower) && !/\bprofile\b/.test(lower)) {
+    return { type: "pulse" };
+  }
+
+  // --- whales ---------------------------------------------------------------
+  if (/\b(whale|whales|biggest|richest|holders)\b/.test(lower)) {
+    return { type: "whales" };
+  }
+
+  // --- who's active / working -----------------------------------------------
+  if (/\b(active|working|workers|busy|productive|contributors)\b/.test(lower)) {
+    return { type: "active" };
+  }
+
+  // --- earners / who got paid -----------------------------------------------
+  if (/\b(earner|earners|paid|earned|income|receiving|getting paid)\b/.test(lower)) {
+    return { type: "earners" };
+  }
+
+  // --- check / is this legit -----------------------------------------------
+  if (/\b(check|legit|legitimate|verify|safe|trust)\b/.test(lower)) {
+    const handleMatch = message.match(HANDLE_RE);
+    return { type: "check", identifier: handleMatch ? handleMatch[1].replace(/^@/, "") : undefined };
+  }
+
+  // --- connections / who talks to who ---------------------------------------
+  if (/\b(connections|connects|talks to|relationship|peers|friends)\b/.test(lower)) {
+    const handleMatch = message.match(HANDLE_RE);
+    return { type: "connections", identifier: handleMatch ? handleMatch[1].replace(/^@/, "") : undefined };
+  }
+
+  // --- sybil check ---------------------------------------------------------
+  if (/\b(sybil|fake|bot check|suspicious)\b/.test(lower)) {
+    const handleMatch = message.match(HANDLE_RE);
+    return { type: "sybil_check", identifier: handleMatch ? handleMatch[1].replace(/^@/, "") : undefined };
+  }
+
+  // --- infra ----------------------------------------------------------------
+  if (/\b(infra|infrastructure|team|system wallets)\b/.test(lower)) {
+    return { type: "infra" };
+  }
+
+  // --- tag -----------------------------------------------------------------
+  if (/\btag\b/.test(lower)) {
+    // "tag rAddress label text"
+    const parts = message.trim().split(/\s+/);
+    const tagIdx = parts.findIndex(p => p.toLowerCase() === "tag" || p.toLowerCase() === "/tag");
+    if (tagIdx >= 0 && parts.length > tagIdx + 2) {
+      const addr = parts[tagIdx + 1];
+      const label = parts.slice(tagIdx + 2).join(" ");
+      return { type: "tag", identifier: addr, query: label };
+    }
+    return { type: "help" }; // bad syntax → show help
+  }
+
   // --- richlist -------------------------------------------------------------
   if (/\b(rich|richlist|rich list|holders|whales|balances)\b/.test(lower)) {
     const limitMatch = lower.match(/\b(\d+)\b/);
