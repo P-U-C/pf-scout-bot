@@ -8,15 +8,18 @@
     "backfill": "tsx src/index.ts backfill",
     "sybil": "tsx src/index.ts sybil",
     "export": "tsx src/index.ts export",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "xrpl": "^4.1.0",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^11.0.0",
+    "xrpl": "^4.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
+    "@types/better-sqlite3": "^7.6.0",
     "tsx": "^4.7.0",
-    "@types/better-sqlite3": "^7.6.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.4"
   }
 }
