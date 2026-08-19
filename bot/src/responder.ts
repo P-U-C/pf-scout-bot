@@ -292,6 +292,33 @@ function formatTemplate(query: ScoutQuery, raw: unknown): string {
     );
   }
 
+  if (query.type === "subs_services") {
+    const data = raw as Record<string, unknown>;
+    const services = (data["services"] ?? []) as Array<Record<string, unknown>>;
+    if (services.length === 0) return "No services registered yet. Be the first — send /register.";
+    const lines = services.map((s, i) => {
+      const subs = s["subscribers_active"] ?? 0;
+      return `${i + 1}. ${s["service_id"]} | ${s["name"]} | ${s["price_pft"]} PFT/${s["period_days"]}d\n   ${s["description"]}\n   ${subs} subscribers | ${s["status"]}`;
+    });
+    return truncate(
+      `SUBS — ${services.length} service(s):\n\n` + lines.join("\n\n") +
+      "\n\nSend /subscribe <id> with PFT to activate.",
+      400
+    );
+  }
+
+  if (query.type === "subs_status") {
+    const data = raw as Record<string, unknown>;
+    const subs = (data["subscriptions"] ?? []) as Array<Record<string, unknown>>;
+    if (subs.length === 0) return "No active subscriptions. Send /services to browse.";
+    const lines = subs.map(s => {
+      const state = s["state"] ?? "unknown";
+      const expires = s["expires_at"] ? String(s["expires_at"]).substring(0, 10) : "?";
+      return `${s["service_id"]}: ${state} (expires ${expires})`;
+    });
+    return truncate("Your subscriptions:\n" + lines.join("\n"), 400);
+  }
+
   return "Unknown query type.";
 }
 

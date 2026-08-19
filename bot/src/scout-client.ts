@@ -141,6 +141,19 @@ export async function queryScout(q: ScoutQuery): Promise<unknown> {
       return res.json();
     }
 
+    case "subs_services": {
+      const res = await fetchWithTimeout(`${base}/chain/subs/services`);
+      if (!res.ok) throw new Error(`/chain/subs/services returned HTTP ${res.status}`);
+      return res.json();
+    }
+
+    case "subs_status": {
+      const wallet = q.params?.requester_wallet ?? q.identifier ?? "";
+      const res = await fetchWithTimeout(`${base}/chain/subs/status/${encodeURIComponent(wallet)}`);
+      if (!res.ok) throw new Error(`/chain/subs/status returned HTTP ${res.status}`);
+      return res.json();
+    }
+
     default:
       throw new Error(`Unknown query type: ${(q as any).type}`);
   }

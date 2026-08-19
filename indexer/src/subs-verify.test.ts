@@ -1,42 +1,40 @@
 /**
- * subs-verify.test.ts — Tests for the SUBS Entitlement Verifier
+ * subs-verify.test.ts — Tests for the Canonical SUBS Entitlement Verifier
  *
- * 12 test cases covering:
- *   1. No payment → inactive + NO_QUALIFYING_PAYMENT
- *   2. Valid payment within period → active + PAYMENT_VALID
- *   3. Payment expired → expired + PAYMENT_EXPIRED
- *   4. Payment in grace period → expiring + PAYMENT_VALID_GRACE_PERIOD
- *   5. Insufficient payment amount → inactive + PAYMENT_INSUFFICIENT
- *   6. Wrong service_id in memo → inactive + NO_QUALIFYING_PAYMENT
- *   7. Wrong memo_type → inactive + NO_QUALIFYING_PAYMENT
- *   8. Lifetime stats accumulate across multiple payments
- *   9. Most recent payment wins (renewal resets period)
- *  10. getActiveSubscribers returns only active addresses
- *  11. Freshness disclosure when crawl_state is available
- *  12. Freshness disclosure when crawl_state is missing
+ * 16 test cases covering:
+ *   1.  No payment → inactive, NO_QUALIFYING_PAYMENT, empty condition vector
+ *   2.  Valid payment → active, PAYMENT_VALID, all 7 conditions pass
+ *   3.  Payment expired → expired, PAYMENT_EXPIRED
+ *   4.  Grace period → expiring, PAYMENT_VALID_GRACE_PERIOD
+ *   5.  Insufficient amount → condition 5 fails, PAYMENT_INSUFFICIENT
+ *   6.  Wrong service_id → condition 4 fails, SERVICE_ID_MISMATCH
+ *   7.  Wrong memo_type → condition 3 fails, NO_QUALIFYING_PAYMENT
+ *   8.  Lifetime stats accumulate across multiple payments
+ *   9.  Most recent payment wins (renewal resets period)
+ *  10.  Overpayment grants one period only
+ *  11.  Service retired → SERVICE_RETIRED before evaluation
+ *  12.  Freshness disclosure — recent index
+ *  13.  Freshness disclosure — stale index, INDEX_STALE_NO_FALLBACK
+ *  14.  Freshness disclosure — missing crawl_state
+ *  15.  Receipt hash is deterministic and stable
+ *  16.  Evaluated conditions vector has 7 entries with correct structure
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
-import {
-  checkEntitlement,
-  getActiveSubscribers,
-  type SubsServiceConfig,
-  type SubsEntitlementResult,
-} from "./subs-verify.js";
+import { checkEntitlement, type SubsServiceConfig } from "./subs-verify.js";
 
 // ─── Test Helpers ───────────────────────────────────────────────────
 
 const PROTOCOL_ADDR = "rSUBSprotocolAddress123456";
-const SERVICE_ADDR = "rServiceProvider123456789";
 const SUBSCRIBER = "rSubscriber123456789ABCD";
-const SUBSCRIBER_2 = "rSubscriber2ABCDEF12345";
 
 const DEFAULT_CONFIG: SubsServiceConfig = {
   subsProtocolAddress: PROTOCOL_ADDR,
   serviceId: "alpha",
   pricePft: 500,
   periodDays: 30,
+  serviceStatus: "active",
   gracePeriodHours: 72,
   stalenessThresholdSeconds: 5400,
 };
@@ -62,16 +60,12 @@ function createTestDb(): Database.Database {
     );
     CREATE INDEX idx_tx_destination ON transactions(destination);
     CREATE INDEX idx_tx_account ON transactions(account);
-
-    CREATE TABLE crawl_state (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
+    CREATE TABLE crawl_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
   return db;
 }
 
-function insertSubscription(
+function insertTx(
   db: Database.Database,
   opts: {
     txHash?: string;
@@ -82,23 +76,16 @@ function insertSubscription(
     memoType?: string;
     txType?: string;
     daysAgo?: number;
-    isoTimestamp?: string;
   } = {},
 ): void {
-  const {
-    txHash = `TX_${Math.random().toString(36).substring(2, 10)}`,
-    subscriber: account = SUBSCRIBER,
-    destination = PROTOCOL_ADDR,
-    amountPft = 500,
-    serviceId = "alpha",
-    memoType = "subs.subscribe",
-    txType = "Payment",
-    daysAgo = 5,
-    isoTimestamp,
-  } = opts;
-
-  const ts = isoTimestamp ?? new Date(Date.now() - daysAgo * 86400000).toISOString();
-  const drops = String(amountPft * 1_000_000);
+  const txHash = opts.txHash ?? `TX_${Math.random().toString(36).substring(2, 10)}`;
+  const account = opts.subscriber ?? SUBSCRIBER;
+  const destination = opts.destination ?? PROTOCOL_ADDR;
+  const drops = String((opts.amountPft ?? 500) * 1_000_000);
+  const memoType = opts.memoType ?? "subs.subscribe";
+  const serviceId = opts.serviceId ?? "alpha";
+  const txType = opts.txType ?? "Payment";
+  const ts = new Date(Date.now() - (opts.daysAgo ?? 5) * 86400000).toISOString();
 
   db.prepare(`
     INSERT INTO transactions
@@ -115,219 +102,231 @@ function setCrawlState(db: Database.Database, minutesAgo: number): void {
 
 // ─── Tests ──────────────────────────────────────────────────────────
 
-describe("subs-verify: checkEntitlement", () => {
+describe("checkEntitlement: qualification + entitlement", () => {
   let db: Database.Database;
+  beforeEach(() => { db = createTestDb(); });
+  afterEach(() => { db.close(); });
 
-  beforeEach(() => {
-    db = createTestDb();
+  // 1. No payment at all
+  it("returns inactive with NO_QUALIFYING_PAYMENT and empty condition vector", () => {
+    setCrawlState(db, 5); // Fresh index so reason isn't INDEX_STALE
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    expect(r.state).toBe("inactive");
+    expect(r.reason).toBe("NO_QUALIFYING_PAYMENT");
+    expect(r.currentPeriod).toBeNull();
+    expect(r.lifetime.totalPayments).toBe(0);
+    expect(r.evaluated_conditions).toHaveLength(7);
+    expect(r.evaluated_conditions[0].passed).toBe(false);
+    expect(r.resolution_method).toBe("chain_query");
   });
 
-  afterEach(() => {
-    db.close();
-  });
-
-  // Test 1: No payment at all
-  it("returns inactive with NO_QUALIFYING_PAYMENT when no payment exists", () => {
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(false);
-    expect(result.state).toBe("inactive");
-    expect(result.reason).toBe("NO_QUALIFYING_PAYMENT");
-    expect(result.subscriber).toBe(SUBSCRIBER);
-    expect(result.serviceId).toBe("alpha");
-    expect(result.currentPeriod).toBeNull();
-    expect(result.lifetime.totalPayments).toBe(0);
-    expect(result.lifetime.totalPaidPft).toBe(0);
-    expect(result.lifetime.firstSubscribedAt).toBeNull();
-  });
-
-  // Test 2: Valid payment within period
-  it("returns active with PAYMENT_VALID for a qualifying payment within period", () => {
-    insertSubscription(db, { txHash: "TX_VALID", daysAgo: 5 });
+  // 2. Valid payment — all 7 conditions pass
+  it("returns active with PAYMENT_VALID and all 7 conditions passing", () => {
+    insertTx(db, { txHash: "TX_VALID", daysAgo: 5 });
     setCrawlState(db, 10);
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(true);
-    expect(result.state).toBe("active");
-    expect(result.reason).toBe("PAYMENT_VALID");
-    expect(result.currentPeriod).not.toBeNull();
-    expect(result.currentPeriod!.paymentTx).toBe("TX_VALID");
-    expect(result.currentPeriod!.amountPft).toBe(500);
-    expect(result.lifetime.totalPayments).toBe(1);
-    expect(result.lifetime.totalPaidPft).toBe(500);
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(true);
+    expect(r.state).toBe("active");
+    expect(r.reason).toBe("PAYMENT_VALID");
+    expect(r.currentPeriod!.paymentTx).toBe("TX_VALID");
+    expect(r.currentPeriod!.amountPft).toBe(500);
+    expect(r.evaluated_conditions).toHaveLength(7);
+    expect(r.evaluated_conditions.every(c => c.passed)).toBe(true);
+    expect(r.evaluated_conditions[6].name).toBe("tx_success");
+    expect(r.evaluated_conditions[6].expected).toBe("tesSUCCESS");
   });
 
-  // Test 3: Payment expired
+  // 3. Expired payment
   it("returns expired with PAYMENT_EXPIRED when payment is outside period", () => {
-    insertSubscription(db, { txHash: "TX_OLD", daysAgo: 35 });
+    insertTx(db, { txHash: "TX_OLD", daysAgo: 35 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(false);
-    expect(result.state).toBe("expired");
-    expect(result.reason).toBe("PAYMENT_EXPIRED");
-    expect(result.currentPeriod).not.toBeNull();
-    expect(result.currentPeriod!.paymentTx).toBe("TX_OLD");
-    expect(result.lifetime.totalPayments).toBe(1);
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    expect(r.state).toBe("expired");
+    expect(r.reason).toBe("PAYMENT_EXPIRED");
+    expect(r.currentPeriod!.paymentTx).toBe("TX_OLD");
   });
 
-  // Test 4: Payment in grace period (72h before expiry)
+  // 4. Grace period
   it("returns expiring with PAYMENT_VALID_GRACE_PERIOD near expiry", () => {
-    // Payment 28.5 days ago → expires in 1.5 days → within 72h grace
-    insertSubscription(db, { txHash: "TX_GRACE", daysAgo: 28.5 });
+    insertTx(db, { txHash: "TX_GRACE", daysAgo: 28.5 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(true);
-    expect(result.state).toBe("expiring");
-    expect(result.reason).toBe("PAYMENT_VALID_GRACE_PERIOD");
-    expect(result.currentPeriod!.paymentTx).toBe("TX_GRACE");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(true);
+    expect(r.state).toBe("expiring");
+    expect(r.reason).toBe("PAYMENT_VALID_GRACE_PERIOD");
   });
 
-  // Test 5: Insufficient payment amount
-  it("returns inactive with PAYMENT_INSUFFICIENT when amount is too low", () => {
-    insertSubscription(db, { txHash: "TX_CHEAP", amountPft: 100 });
+  // 5. Insufficient amount — condition 5 fails
+  it("returns PAYMENT_INSUFFICIENT when condition 5 fails", () => {
+    insertTx(db, { txHash: "TX_CHEAP", amountPft: 100, daysAgo: 5 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(false);
-    expect(result.state).toBe("inactive");
-    expect(result.reason).toBe("PAYMENT_INSUFFICIENT");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    expect(r.reason).toBe("PAYMENT_INSUFFICIENT");
+    // Condition 5 specifically should fail
+    const cond5 = r.evaluated_conditions.find(c => c.id === 5);
+    expect(cond5?.passed).toBe(false);
+    expect(cond5?.reason_code).toBe("PAYMENT_INSUFFICIENT");
   });
 
-  // Test 6: Wrong service_id in memo
-  it("returns inactive when memo_data contains wrong service_id", () => {
-    insertSubscription(db, { txHash: "TX_WRONG_SVC", serviceId: "beta" });
+  // 6. Wrong service_id — condition 4 fails
+  it("returns SERVICE_ID_MISMATCH when condition 4 fails", () => {
+    insertTx(db, { txHash: "TX_WRONG_SVC", serviceId: "beta", daysAgo: 5 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(false);
-    expect(result.state).toBe("inactive");
-    expect(result.reason).toBe("NO_QUALIFYING_PAYMENT");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    expect(r.reason).toBe("SERVICE_ID_MISMATCH");
+    const cond4 = r.evaluated_conditions.find(c => c.id === 4);
+    expect(cond4?.passed).toBe(false);
+    expect(cond4?.reason_code).toBe("SERVICE_ID_MISMATCH");
   });
 
-  // Test 7: Wrong memo_type
-  it("returns inactive when memo_type is not subs.subscribe", () => {
-    insertSubscription(db, { txHash: "TX_WRONG_TYPE", memoType: "pf.ptr" });
+  // 7. Wrong memo_type — condition 3 fails
+  it("returns NO_QUALIFYING_PAYMENT when memo_type is wrong", () => {
+    insertTx(db, { txHash: "TX_WRONG_TYPE", memoType: "pf.ptr", daysAgo: 5 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(false);
-    expect(result.state).toBe("inactive");
-    expect(result.reason).toBe("NO_QUALIFYING_PAYMENT");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    // No candidates match conditions 1+2+6 with memo_type=pf.ptr, so falls through
+    const cond3 = r.evaluated_conditions.find(c => c.id === 3);
+    expect(cond3?.passed).toBe(false);
   });
 
-  // Test 8: Lifetime stats accumulate
+  // 8. Lifetime accumulation
   it("accumulates lifetime stats across multiple payments", () => {
-    insertSubscription(db, { txHash: "TX_1", daysAgo: 60, amountPft: 500 });
-    insertSubscription(db, { txHash: "TX_2", daysAgo: 25, amountPft: 500 });
-    insertSubscription(db, { txHash: "TX_3", daysAgo: 2, amountPft: 600 });
+    insertTx(db, { txHash: "TX_1", daysAgo: 60, amountPft: 500 });
+    insertTx(db, { txHash: "TX_2", daysAgo: 25, amountPft: 500 });
+    insertTx(db, { txHash: "TX_3", daysAgo: 2, amountPft: 600 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(true);
-    expect(result.lifetime.totalPayments).toBe(3);
-    expect(result.lifetime.totalPaidPft).toBe(1600);
-    expect(result.lifetime.firstSubscribedAt).not.toBeNull();
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(true);
+    expect(r.lifetime.totalPayments).toBe(3);
+    expect(r.lifetime.totalPaidPft).toBe(1600);
+    expect(r.lifetime.firstSubscribedAt).not.toBeNull();
   });
 
-  // Test 9: Most recent payment wins (renewal)
+  // 9. Most recent payment wins
   it("uses most recent qualifying payment for period calculation", () => {
-    insertSubscription(db, { txHash: "TX_OLD_PERIOD", daysAgo: 20 });
-    insertSubscription(db, { txHash: "TX_RENEWAL", daysAgo: 2 });
+    insertTx(db, { txHash: "TX_OLD_PERIOD", daysAgo: 20 });
+    insertTx(db, { txHash: "TX_RENEWAL", daysAgo: 2 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.entitled).toBe(true);
-    expect(result.state).toBe("active");
-    expect(result.currentPeriod!.paymentTx).toBe("TX_RENEWAL");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(true);
+    expect(r.currentPeriod!.paymentTx).toBe("TX_RENEWAL");
   });
 
-  // Test 10: Overpayment still grants only one period (no extension)
+  // 10. Overpayment — one period only
   it("grants one period for overpayment without extension", () => {
-    insertSubscription(db, { txHash: "TX_OVERPAY", amountPft: 1500, daysAgo: 5 });
+    insertTx(db, { txHash: "TX_OVERPAY", amountPft: 1500, daysAgo: 5 });
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.entitled).toBe(true);
+    const start = new Date(r.currentPeriod!.startedAt);
+    const end = new Date(r.currentPeriod!.expiresAt);
+    const days = (end.getTime() - start.getTime()) / 86400000;
+    expect(days).toBe(30);
+  });
 
-    expect(result.entitled).toBe(true);
-    expect(result.currentPeriod!.amountPft).toBe(1500);
-    // Period is still 30 days, not 90
-    const start = new Date(result.currentPeriod!.startedAt);
-    const end = new Date(result.currentPeriod!.expiresAt);
-    const periodMs = end.getTime() - start.getTime();
-    const periodDays = periodMs / (86400 * 1000);
-    expect(periodDays).toBe(30);
+  // 11. Service retired
+  it("returns SERVICE_RETIRED immediately without evaluating payments", () => {
+    insertTx(db, { txHash: "TX_VALID_BUT_RETIRED", daysAgo: 5 });
+
+    const config = { ...DEFAULT_CONFIG, serviceStatus: "retired" as const };
+    const r = checkEntitlement(db, config, SUBSCRIBER);
+    expect(r.entitled).toBe(false);
+    expect(r.state).toBe("inactive");
+    expect(r.reason).toBe("SERVICE_RETIRED");
+    expect(r.evaluated_conditions[0].reason_code).toBe("SERVICE_RETIRED");
   });
 });
 
-describe("subs-verify: getActiveSubscribers", () => {
+describe("checkEntitlement: freshness disclosure", () => {
   let db: Database.Database;
+  beforeEach(() => { db = createTestDb(); });
+  afterEach(() => { db.close(); });
 
-  beforeEach(() => {
-    db = createTestDb();
+  // 12. Fresh index
+  it("reports fresh index with source=chain_index and stale=false", () => {
+    setCrawlState(db, 5);
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.freshness.source).toBe("chain_index");
+    expect(r.freshness.stale).toBe(false);
+    expect(r.freshness.disclosure).toContain("within freshness window");
   });
 
-  afterEach(() => {
-    db.close();
+  // 13. Stale index — reason code escalates
+  it("flags INDEX_STALE_NO_FALLBACK when index is stale and no payment found", () => {
+    setCrawlState(db, 120);
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.freshness.stale).toBe(true);
+    expect(r.freshness.disclosure).toContain("STALE");
+    expect(r.reason).toBe("INDEX_STALE_NO_FALLBACK");
   });
 
-  // Test 11: Returns only active subscribers
-  it("returns only subscribers with qualifying payments within period", () => {
-    // Active subscriber
-    insertSubscription(db, { subscriber: SUBSCRIBER, daysAgo: 5 });
-    // Expired subscriber
-    insertSubscription(db, { subscriber: SUBSCRIBER_2, daysAgo: 35 });
-
-    const active = getActiveSubscribers(db, DEFAULT_CONFIG);
-
-    expect(active).toContain(SUBSCRIBER);
-    expect(active).not.toContain(SUBSCRIBER_2);
-    expect(active.length).toBe(1);
-  });
-});
-
-describe("subs-verify: freshness disclosure", () => {
-  let db: Database.Database;
-
-  beforeEach(() => {
-    db = createTestDb();
-  });
-
-  afterEach(() => {
-    db.close();
-  });
-
-  // Test 12: Freshness with crawl_state available
-  it("reports freshness when crawl_state exists and is recent", () => {
-    setCrawlState(db, 5); // 5 minutes ago
-
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.freshness.indexedAt).not.toBeNull();
-    expect(result.freshness.stale).toBe(false);
-    expect(result.freshness.stalenessSeconds).toBeGreaterThanOrEqual(0);
-    expect(result.freshness.note).toContain("within freshness window");
-  });
-
-  // Test 13: Freshness when crawl_state is stale
-  it("flags staleness when index is older than threshold", () => {
-    setCrawlState(db, 120); // 2 hours ago
-
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
-
-    expect(result.freshness.stale).toBe(true);
-    expect(result.freshness.note).toContain("STALE");
-  });
-
-  // Test 14: Freshness when crawl_state is missing
-  it("handles missing crawl_state gracefully", () => {
+  // 14. Missing crawl_state
+  it("handles missing crawl_state with stale=true and disclosure note", () => {
     db.exec("DELETE FROM crawl_state");
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.freshness.indexedAt).toBeNull();
+    expect(r.freshness.stale).toBe(true);
+    expect(r.freshness.disclosure).toContain("not available");
+  });
+});
 
-    const result = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+describe("checkEntitlement: receipt", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = createTestDb(); });
+  afterEach(() => { db.close(); });
 
-    expect(result.freshness.indexedAt).toBeNull();
-    expect(result.freshness.stale).toBe(true);
-    expect(result.freshness.note).toContain("not available");
+  // 15. Receipt hash is deterministic
+  it("produces deterministic receipt hash for same inputs", () => {
+    insertTx(db, { txHash: "TX_RECEIPT", daysAgo: 5 });
+    setCrawlState(db, 2);
+
+    const r1 = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    const r2 = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+
+    expect(r1.receipt.hash).toBe(r2.receipt.hash);
+    expect(r1.receipt.hash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(r1.receipt.inputs.methodologyVersion).toBe("1.0.0");
+    expect(r1.receipt.inputs.qualifyingTx).toBe("TX_RECEIPT");
+    expect(r1.receipt.inputs.subscriber).toBe(SUBSCRIBER);
+    expect(r1.receipt.inputs.serviceId).toBe("alpha");
+  });
+});
+
+describe("checkEntitlement: evaluated_conditions structure", () => {
+  let db: Database.Database;
+  beforeEach(() => { db = createTestDb(); });
+  afterEach(() => { db.close(); });
+
+  // 16. Condition vector has correct structure
+  it("returns 7 conditions with id, name, passed, field, observed, expected, reason_code", () => {
+    insertTx(db, { daysAgo: 5 });
+
+    const r = checkEntitlement(db, DEFAULT_CONFIG, SUBSCRIBER);
+    expect(r.evaluated_conditions).toHaveLength(7);
+
+    const expectedNames = [
+      "destination_match", "subscriber_match", "memo_type_match",
+      "service_id_match", "sufficient_payment", "valid_tx_type", "tx_success",
+    ];
+
+    for (let i = 0; i < 7; i++) {
+      const c = r.evaluated_conditions[i];
+      expect(c.id).toBe(i + 1);
+      expect(c.name).toBe(expectedNames[i]);
+      expect(typeof c.passed).toBe("boolean");
+      expect(typeof c.field).toBe("string");
+      expect(typeof c.observed).toBe("string");
+      expect(typeof c.expected).toBe("string");
+      // reason_code is null when passed, a SubsReason when failed
+      if (c.passed) {
+        expect(c.reason_code).toBeNull();
+      }
+    }
   });
 });

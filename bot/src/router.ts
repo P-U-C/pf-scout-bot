@@ -126,6 +126,16 @@ export function parseQuery(message: string): ScoutQuery {
     };
   }
 
+  // --- SUBS: /services -------------------------------------------------------
+  if (/^\/services\b/.test(lower) || /\b(services|marketplace|subs|subscribe)\b/.test(lower) && /\b(list|show|what|available)\b/.test(lower)) {
+    return { type: "subs_services" };
+  }
+
+  // --- SUBS: /status --------------------------------------------------------
+  if (/^\/status\b/.test(lower) || (/\b(subscription|subscribed|my sub)\b/.test(lower))) {
+    return { type: "subs_status" };
+  }
+
   // --- search (default) ----------------------------------------------------
   return {
     type: "search",

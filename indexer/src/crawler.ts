@@ -21,7 +21,7 @@ export interface CrawlerConfig {
 }
 
 export const DEFAULT_CONFIG: CrawlerConfig = {
-  rpcUrl: process.env.PFTL_RPC_URL ?? "https://rpc.testnet.postfiat.org",
+  rpcUrl: process.env.PFTL_RPC_URL ?? "http://127.0.0.1:5015",
   maxDepth: 3,
   txLimitPerAccount: 0,  // Fetch all
   rateLimitMs: 100,
@@ -126,17 +126,22 @@ function indexTransaction(
   db: Database.Database,
   tx: Record<string, unknown>,
   meta: Record<string, unknown> | null,
-): { account: string; destination: string | null; hasMemo: boolean } | null {
+): { account: string; destination: string | null; hasMemo: boolean; alreadyIndexed: boolean } | null {
   const t = (tx as Record<string, unknown>);
   const txHash = (t.hash ?? t.Hash ?? "") as string;
   if (!txHash) return null;
 
-  // Skip if already indexed
-  const exists = db.prepare("SELECT 1 FROM transactions WHERE tx_hash = ?").get(txHash);
-  if (exists) return null;
-
   const account = (t.Account ?? "") as string;
   const destination = (t.Destination ?? null) as string | null;
+
+  // Check if already indexed — but still return metadata so the caller can process edges
+  const exists = db.prepare("SELECT 1 FROM transactions WHERE tx_hash = ?").get(txHash);
+  if (exists) {
+    const memos = (t.Memos ?? []) as unknown[];
+    const hasMemo = memos.length > 0;
+    return { account, destination, hasMemo, alreadyIndexed: true };
+  }
+
   const txType = (t.TransactionType ?? "") as string;
   const amountDrops = typeof t.Amount === "string" ? t.Amount : "0";
   const feeDrops = (t.Fee ?? "0") as string;
@@ -162,7 +167,7 @@ function indexTransaction(
     JSON.stringify(t),
   );
 
-  return { account, destination, hasMemo };
+  return { account, destination, hasMemo, alreadyIndexed: false };
 }
 
 // ─── Edge Tracking ───────────────────────────────────────────────────
@@ -271,11 +276,24 @@ export async function crawl(
           const ts = date > 0 ? rippleTimeToISO(date) : now;
           const amount = typeof t.Amount === "string" ? t.Amount : "0";
 
-          // Track counterparties
+          // Track counterparties and edges — ALWAYS run this, even for already-indexed txns.
+          // Previously edges were only created when a transaction was first indexed, which
+          // meant re-crawling or crawling in a different order left edges missing.
           if (indexed.destination && indexed.destination !== account) {
             ensureAccount(db, indexed.destination, ledgerIdx, now, depth + 1);
             newCounterparties.add(indexed.destination);
-            upsertEdge(db, indexed.account, indexed.destination, indexed.hasMemo, amount, ts);
+            // Only upsert edge if this was a newly-indexed tx OR if the edge doesn't exist yet
+            if (!indexed.alreadyIndexed) {
+              upsertEdge(db, indexed.account, indexed.destination, indexed.hasMemo, amount, ts);
+            } else {
+              // Ensure edge exists even if tx was already indexed (fixes gaps from earlier bug)
+              const edgeExists = db.prepare(
+                "SELECT 1 FROM edges WHERE from_address = ? AND to_address = ? LIMIT 1"
+              ).get(indexed.account, indexed.destination);
+              if (!edgeExists) {
+                upsertEdge(db, indexed.account, indexed.destination, indexed.hasMemo, amount, ts);
+              }
+            }
           }
           if (indexed.account !== account) {
             ensureAccount(db, indexed.account, ledgerIdx, now, depth + 1);

@@ -59,6 +59,8 @@ export const DEFAULT_SYBIL_CONFIG: SybilConfig = {
     "rhczhWeG3eSohzcH5jw8m8Ynca9cgH4eZm",  // Treasury
     "rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE",  // Distribution
     "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk",  // Distribution 2
+    "rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP",  // Task Node 3
+    "rBDbRYd8H7gB6mdNTRssK7DP4YuKbiS7Db",  // Reserve
   ],
   // Standard amounts (in drops) to exclude from amount fingerprinting
   // These are common transaction sizes that don't indicate sybil behavior
@@ -443,8 +445,31 @@ export function analyzeSybil(
   console.log(`  [sybil] Amount fingerprints: ${amounts.length} pairs`);
 
   // Build clusters
-  const clusters = buildClusters(allSignals, config.minConfidence);
-  console.log(`  [sybil] Clusters found: ${clusters.length}`);
+  const rawClusters = buildClusters(allSignals, config.minConfidence);
+  console.log(`  [sybil] Raw clusters: ${rawClusters.length}`);
+
+  // Filter out false-positive clusters: legitimate contributors who share
+  // natural patterns (same reward amounts, similar activity times) because
+  // they work the same task node. A real sybil cluster has low memo activity
+  // across its members; real contributors have high memo activity.
+  const clusters = rawClusters.filter((cluster) => {
+    const placeholders = cluster.addresses.map(() => "?").join(",");
+    const result = db.prepare(
+      `SELECT
+         COUNT(*) as total,
+         SUM(CASE WHEN memo_tx_count > 10 THEN 1 ELSE 0 END) as active
+       FROM accounts WHERE address IN (${placeholders})`
+    ).get(...cluster.addresses) as { total: number; active: number };
+
+    // If >30% of the cluster have significant memo activity, it's real contributors
+    const activeRatio = result.total > 0 ? result.active / result.total : 0;
+    if (activeRatio > 0.3) {
+      console.log(`  [sybil] Rejecting cluster ${cluster.clusterId} — ${result.active}/${result.total} members have memo activity (false positive)`);
+      return false;
+    }
+    return true;
+  });
+  console.log(`  [sybil] Clusters after filter: ${clusters.length}`);
 
   // Persist clusters
   const insertCluster = db.prepare(`

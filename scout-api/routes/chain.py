@@ -593,3 +593,87 @@ def top_earners(limit: int = Query(10, ge=1, le=20)):
         return {"earners": results}
     finally:
         db.close()
+
+
+# ─── SUBS Protocol Routes ───────────────────────────────────────────
+
+SUBS_JSON = os.path.expanduser("~/pft-validator/lens/subs.json")
+
+
+@router.get("/subs/services")
+def subs_services():
+    """List all registered services from subs.json."""
+    import json
+    try:
+        with open(SUBS_JSON) as f:
+            data = json.load(f)
+        return data
+    except FileNotFoundError:
+        return {"services": [], "error": "subs.json not found"}
+
+
+@router.get("/subs/status/{address}")
+def subs_status(address: str):
+    """Check subscription status for a wallet against all services."""
+    import json
+    try:
+        with open(SUBS_JSON) as f:
+            registry = json.load(f)
+    except FileNotFoundError:
+        return {"subscriptions": [], "error": "subs.json not found"}
+
+    db = get_db()
+    try:
+        services = registry.get("services", [])
+        subs_protocol_addr = registry.get("protocol_address", "")
+        results = []
+
+        for svc in services:
+            service_id = svc.get("service_id", "")
+            price_drops = int(svc.get("price_drops", 0))
+            period_days = int(svc.get("period_days", 30))
+
+            # Check for subscription payment. Task Node sends all messages as
+            # keystone-encrypted envelopes, so we match on amount rather than
+            # memo_type. Any payment >= service price to the protocol address
+            # from this user counts as a subscription.
+            row = db.execute("""
+                SELECT tx_hash, timestamp_iso, CAST(amount_drops AS INTEGER) as amount_drops
+                FROM transactions
+                WHERE destination = ?
+                  AND account = ?
+                  AND CAST(amount_drops AS INTEGER) >= ?
+                  AND tx_type = 'Payment'
+                ORDER BY timestamp_iso DESC
+                LIMIT 1
+            """, (subs_protocol_addr, address, price_drops)).fetchone()
+
+            if not row:
+                continue
+
+            from datetime import datetime, timedelta, timezone
+            payment_time = datetime.fromisoformat(row["timestamp_iso"].replace("Z", "+00:00"))
+            expires_at = payment_time + timedelta(days=period_days)
+            now = datetime.now(timezone.utc)
+
+            if now >= expires_at:
+                state = "expired"
+            elif now >= expires_at - timedelta(hours=72):
+                state = "expiring"
+            else:
+                state = "active"
+
+            results.append({
+                "service_id": service_id,
+                "service_name": svc.get("name", ""),
+                "state": state,
+                "entitled": state in ("active", "expiring"),
+                "started_at": row["timestamp_iso"],
+                "expires_at": expires_at.isoformat(),
+                "payment_tx": row["tx_hash"],
+                "amount_pft": row["amount_drops"] / 1_000_000,
+            })
+
+        return {"subscriber": address, "subscriptions": results}
+    finally:
+        db.close()

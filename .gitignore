@@ -137,3 +137,14 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# --- Added 2026-08-19 while backing up 14 days of uncommitted work ---
+# This repo is PUBLIC. Everything below is either a live credential, machine
+# state, or content that belongs in a different repo.
+bot/.keystone-api-key
+deploy/.heartbeat-state
+# Personal training protocols (8.3MB of HTML/PDF) -- unrelated to the scout bot.
+fitness/
+# Stale duplicate of the options scanner. Canonical copy lives in puc-trading
+# (private); publishing the strategy here would leak it.
+scanner/

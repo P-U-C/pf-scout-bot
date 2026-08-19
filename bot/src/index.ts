@@ -111,6 +111,11 @@ async function main(): Promise<void> {
 
           // ── Route to scout-api ──
           const parsed = parseQuery(queryText);
+          // Pass requester wallet for SUBS status lookups
+          if (parsed.type === "subs_status") {
+            parsed.identifier = msg.sender;
+            parsed.params = { ...parsed.params, requester_wallet: msg.sender };
+          }
           console.log(`  [debug] parsed query: ${JSON.stringify(parsed)}`);
           const scoutResult = await queryScout(parsed);
 

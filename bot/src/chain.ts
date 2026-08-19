@@ -100,6 +100,7 @@ export async function scanInbound(
       content: text.trim(),
       ledgerIndex: msg.ledgerIndex,
       timestampIso: msg.timestampIso || new Date().toISOString(),
+      amountDrops: msg.amountDrops || "0",
     });
   }
 

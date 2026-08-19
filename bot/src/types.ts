@@ -4,10 +4,11 @@ export interface InboundMessage {
   content: string;      // decrypted / plain-text message body
   ledgerIndex: number;
   timestampIso: string;
+  amountDrops: string;  // PFT amount in drops attached to the transaction
 }
 
 export interface ScoutQuery {
-  type: "search" | "profile" | "list" | "richlist" | "help" | "stats" | "infra" | "tag" | "whales" | "active" | "connections" | "check" | "pulse" | "earners" | "network" | "sybil_check";
+  type: "search" | "profile" | "list" | "richlist" | "help" | "stats" | "infra" | "tag" | "whales" | "active" | "connections" | "check" | "pulse" | "earners" | "network" | "sybil_check" | "subs_services" | "subs_status";
   query?: string;
   identifier?: string;  // for profile lookups (handle, r-address, …)
   tier?: string;
