@@ -18,7 +18,6 @@ set -uo pipefail
 DEPLOY_DIR="${DEPLOY_DIR:-/home/ubuntu/pf-scout-bot/deploy}"
 TG_ENV="${TG_ENV:-/home/ubuntu/.claude/channels/telegram/.env}"
 STATE_FILE="${HEARTBEAT_STATE_FILE:-$DEPLOY_DIR/.heartbeat-state}"
-CLAUDE_BIN="${CLAUDE_BIN:-/home/ubuntu/.local/bin/claude}"
 export PATH="/home/ubuntu/.claude/local/bin:$PATH"
 
 BOT_CFG=/tmp/register-bot-mcp.json
@@ -40,12 +39,16 @@ ping_status() {
   # false alert is worse than none. The ping tool replies in prose/markdown,
   # e.g. 'Status **active**', so match 'status' ... 'active' on the line.
   for attempt in 1 2 3; do
-    # timeout bounds each invocation so no orphaned MCP server it leaks can ever
-    # be younger than the reaper's age guard while its claude is still alive.
-    out="$(timeout -k 15 120 "$CLAUDE_BIN" -p "Use the ping tool to send a heartbeat." \
-      --mcp-config "$cfg" --permission-mode bypassPermissions \
-      --output-format text < /dev/null 2>/dev/null)"
-    if printf '%s' "$out" | grep -qiE 'status.*active'; then
+    # Direct JSON-RPC, no model: this monitor was itself spending ~72 model
+    # sessions a day to ask a question with no judgement in it. See ping-bot.sh
+    # for the full accounting.
+    #
+    # Trust the exit status, not a regex over prose. mcp-call.py returns 0 only
+    # when the tool reports success (it checks the MCP isError flag), so the
+    # tool's own verdict decides -- where 'status.*active' was pattern-matching
+    # whatever wording the model happened to relay that morning.
+    if timeout -k 15 120 /home/ubuntu/scripts/mcp-call.py \
+         --config "$cfg" --tool ping --timeout 100 >/dev/null 2>&1; then
       echo "active"; return
     fi
     sleep 5
