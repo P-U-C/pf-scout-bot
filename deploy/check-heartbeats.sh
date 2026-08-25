@@ -84,10 +84,9 @@ notify() {
 }
 
 # Alerting only on a transition is right for a flapping service and wrong for a
-# broken one. The heartbeats have been failing since the Keystone IPv6 gap
-# opened; the state file latched at "stale", every later run compared stale to
-# stale, and the monitor went quiet for months about a thing that was never
-# fixed. A permanently-bad state that stops mentioning itself is the same
+# broken one. The heartbeats have been failing for as long as this log exists;
+# the state file latched at "stale", every later run compared stale to stale,
+# and the monitor went quiet for months about a thing that was never fixed. A permanently-bad state that stops mentioning itself is the same
 # failure as a green light on a dead pipeline, just wearing the opposite colour.
 #
 # So: still alert on every transition, and additionally re-state a persistent
@@ -113,7 +112,7 @@ elif [ "$CURRENT" = "healthy" ] && [ "$PREV" = "stale" ]; then
   notify "✅ Bot heartbeats recovered: lens and subs are both active again."
   stamp_notify
 elif [ "$CURRENT" = "stale" ] && remind_due; then
-  notify "⚠️ Bot heartbeats still down (lens=${BOT_STATUS}, subs=${SUBS_STATUS}) — unchanged for ${REMIND_AFTER_DAYS}+ days, so this is a standing outage, not a blip. Known cause: clawd has no IPv6 egress and keystone-grpc.postfiat.org is only reachable over IPv6 (Fly shared IPv4 fails at TLS). Needs IPv6 on the LAN, a tunnel, or a dedicated Fly IPv4 — not fixable from inside this box. The bots stay hidden from the registry until then."
+  notify "⚠️ Bot heartbeats still down (lens=${BOT_STATUS}, subs=${SUBS_STATUS}) — unchanged for ${REMIND_AFTER_DAYS}+ days, so this is a standing outage, not a blip. Diagnosed 2026-08-25: keystone-grpc.postfiat.org accepts TCP and then serves nothing — TLS closes with unexpected EOF, h2c resets, port 80 empty-replies — identically from two independent networks (this ISP over IPv4, Cloudflare over IPv6). postfiat.org itself is up, so it is that one service. This is upstream, not our config: nothing on this box can fix it, and the bots stay hidden from the registry until postfiat brings it back."
   stamp_notify
 fi
 
