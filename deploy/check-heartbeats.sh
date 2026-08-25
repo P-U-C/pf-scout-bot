@@ -83,10 +83,38 @@ notify() {
     --data-urlencode "text=${text}" || true
 }
 
+# Alerting only on a transition is right for a flapping service and wrong for a
+# broken one. The heartbeats have been failing since the Keystone IPv6 gap
+# opened; the state file latched at "stale", every later run compared stale to
+# stale, and the monitor went quiet for months about a thing that was never
+# fixed. A permanently-bad state that stops mentioning itself is the same
+# failure as a green light on a dead pipeline, just wearing the opposite colour.
+#
+# So: still alert on every transition, and additionally re-state a persistent
+# outage on a slow cadence. Slow enough not to become noise, often enough that
+# "we forgot" is not how it ends.
+REMIND_AFTER_DAYS="${HEARTBEAT_REMIND_AFTER_DAYS:-7}"
+LAST_NOTIFY_FILE="$DEPLOY_DIR/.heartbeat-last-notify"
+
+remind_due() {
+  local last now
+  last="$(cat "$LAST_NOTIFY_FILE" 2>/dev/null || echo 0)"
+  case "$last" in (*[!0-9]*|"") last=0 ;; esac
+  now="$(date +%s)"
+  [ "$(( (now - last) / 86400 ))" -ge "$REMIND_AFTER_DAYS" ]
+}
+
+stamp_notify() { date +%s > "$LAST_NOTIFY_FILE"; }
+
 if [ "$CURRENT" = "stale" ] && [ "$PREV" != "stale" ]; then
   notify "⚠️ Bot heartbeat check: lens=${BOT_STATUS}, subs=${SUBS_STATUS}. One or both bots are not reporting active. Auto-regen of /tmp configs already attempted. Check uptime -s for a reboot and run regen-mcp-configs.sh + a manual ping."
+  stamp_notify
 elif [ "$CURRENT" = "healthy" ] && [ "$PREV" = "stale" ]; then
   notify "✅ Bot heartbeats recovered: lens and subs are both active again."
+  stamp_notify
+elif [ "$CURRENT" = "stale" ] && remind_due; then
+  notify "⚠️ Bot heartbeats still down (lens=${BOT_STATUS}, subs=${SUBS_STATUS}) — unchanged for ${REMIND_AFTER_DAYS}+ days, so this is a standing outage, not a blip. Known cause: clawd has no IPv6 egress and keystone-grpc.postfiat.org is only reachable over IPv6 (Fly shared IPv4 fails at TLS). Needs IPv6 on the LAN, a tunnel, or a dedicated Fly IPv4 — not fixable from inside this box. The bots stay hidden from the registry until then."
+  stamp_notify
 fi
 
 echo "[$(date -u +%FT%TZ)] heartbeat check: lens=$BOT_STATUS subs=$SUBS_STATUS state=$CURRENT (prev=$PREV)"
